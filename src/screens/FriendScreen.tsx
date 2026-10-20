@@ -3,6 +3,7 @@ import { Check, ExternalLink, Loader2, Lock } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage } from '../api/client';
 import type { FriendGift, FriendPayload, Member } from '../api/types';
+import { AmountInput } from '../components/AmountInput';
 import { Avatar } from '../components/Avatar';
 import { Confetti } from '../components/Confetti';
 import { GiftThumb } from '../components/GiftThumb';
@@ -15,11 +16,9 @@ import { confirmAction, haptic, hapticNotification, hapticSelection, openLink } 
 import {
   currencySymbol,
   formatMoney,
-  formatNumber,
   formatShort,
   fullName,
   linkHost,
-  parseAmount,
   plural,
   pluralize,
   quickAmounts,
@@ -304,15 +303,12 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 Вашу сумму не увидит никто — ни {friend?.first_name ?? 'владелец вишлиста'}, ни другие участники
               </p>
               <div className="mt-3 flex items-center rounded-[14px] bg-fill px-4 focus-within:ring-2 focus-within:ring-accent">
-                <input
+                <AmountInput
                   id="pledge"
-                  value={draft ? formatNumber(draft) : ''}
-                  onChange={(e) => onDraft(parseAmount(e.target.value))}
+                  value={draft}
+                  onChange={onDraft}
                   placeholder="0"
-                  inputMode="numeric"
-                  pattern="[0-9 ]*"
-                  autoComplete="off"
-                  className="tabular h-14 w-full bg-transparent text-[26px] font-bold outline-none placeholder:text-hint/60"
+                  className="h-14 w-full bg-transparent text-[26px] leading-[56px] font-bold outline-none placeholder:text-hint/60"
                 />
                 <span className="text-[24px] font-bold text-hint">{currencySymbol()}</span>
               </div>
@@ -487,7 +483,14 @@ function GiftCard({
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[14px]">
             <span className="tabular font-semibold">{formatMoney(gift.price)}</span>
             {gift.link && (
-              <button onClick={() => openLink(gift.link!)} className="flex items-center gap-1 text-link">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openLink(gift.link!);
+                }}
+                data-link
+                className="-mx-1.5 -my-1 flex items-center gap-1 rounded-md px-1.5 py-1 text-link active:opacity-60"
+              >
                 <ExternalLink size={13} />
                 {linkHost(gift.link)}
               </button>
@@ -594,7 +597,14 @@ function ReservedCard({
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[14px]">
             <span className="tabular text-hint">{formatMoney(gift.price)}</span>
             {gift.link && (
-              <button onClick={() => openLink(gift.link!)} className="flex items-center gap-1 text-link">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openLink(gift.link!);
+                }}
+                data-link
+                className="-mx-1.5 -my-1 flex items-center gap-1 rounded-md px-1.5 py-1 text-link active:opacity-60"
+              >
                 <ExternalLink size={13} />
                 {linkHost(gift.link)}
               </button>

@@ -4,12 +4,13 @@ import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../api/client';
 import { primeGiftImage, useGiftImage } from '../api/images';
 import type { Gift } from '../api/types';
+import { AmountInput } from '../components/AmountInput';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { Layer, useMainButton } from '../telegram/buttons';
-import { confirmAction, hapticNotification, hapticSelection } from '../telegram/webapp';
+import { confirmAction, hapticNotification, hapticSelection, openLink } from '../telegram/webapp';
 import { GIFT_EMOJIS, guessEmoji } from '../utils/emoji';
-import { currencySymbol, formatNumber, parseAmount } from '../utils/format';
+import { currencySymbol } from '../utils/format';
 import { prepareGiftImage } from '../utils/image';
 
 interface Props {
@@ -55,6 +56,14 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
   }, [emoji]);
 
   const pickPhoto = () => fileRef.current?.click();
+
+  // Ссылку можно проверить прямо из редактора; без протокола достраиваем https://,
+  // как это делает и база при сохранении
+  const linkUrl = (() => {
+    const raw = link.trim();
+    if (!/^(https?:\/\/)?[^\s/]+\.[^\s]{2,}/i.test(raw)) return null;
+    return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  })();
 
   const onFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -216,18 +225,15 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
           <div className="mx-4 h-px bg-separator" />
           <label className="block px-4 pt-2.5 pb-1">
             <span className="text-[12px] font-medium text-hint">Цена</span>
-            <div className="flex items-center">
-              <input
+            <div className="flex items-center pb-1">
+              <AmountInput
                 name="price"
-                value={price ? formatNumber(price) : ''}
-                onChange={(e) => setPrice(parseAmount(e.target.value))}
+                value={price}
+                onChange={setPrice}
                 placeholder="0"
-                inputMode="numeric"
-                pattern="[0-9 ]*"
-                autoComplete="off"
-                className="tabular block w-full bg-transparent pb-1.5 text-[17px] font-semibold outline-none placeholder:font-normal placeholder:text-hint/70"
+                className="block h-8 w-full bg-transparent text-[17px] leading-8 font-semibold outline-none placeholder:font-normal placeholder:text-hint/70"
               />
-              <span className="pb-1.5 text-[17px] font-semibold text-hint">{currencySymbol()}</span>
+              <span className="text-[17px] font-semibold text-hint">{currencySymbol()}</span>
             </div>
           </label>
         </div>
@@ -238,17 +244,29 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
           <span className="flex items-center gap-1 text-[12px] font-medium text-hint">
             <Link2 size={13} /> Ссылка на товар
           </span>
-          <input
-            name="link"
-            value={link}
-            onChange={(e) => setLink(e.target.value)}
-            placeholder="https://… — необязательно"
-            inputMode="url"
-            autoCapitalize="off"
-            autoComplete="off"
-            maxLength={500}
-            className="block w-full bg-transparent pb-1.5 text-[16px] outline-none placeholder:text-hint/70"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              name="link"
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+              placeholder="https://… — необязательно"
+              inputMode="url"
+              autoCapitalize="off"
+              autoComplete="off"
+              maxLength={500}
+              className="block w-full bg-transparent pb-1.5 text-[16px] outline-none placeholder:text-hint/70"
+            />
+            {linkUrl && (
+              <button
+                type="button"
+                onClick={() => openLink(linkUrl)}
+                data-open-link
+                className="shrink-0 pb-1.5 text-[14px] font-semibold text-link active:opacity-60"
+              >
+                Открыть
+              </button>
+            )}
+          </div>
         </label>
       </div>
 
