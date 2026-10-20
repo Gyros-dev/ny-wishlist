@@ -29,6 +29,10 @@ export function setCurrency(code: string) {
   moneyFormat = makeMoneyFormat(code);
 }
 
+export function currentCurrency(): string {
+  return currencyCode;
+}
+
 export function currencySymbol(): string {
   return currencySymbolOf(currencyCode);
 }

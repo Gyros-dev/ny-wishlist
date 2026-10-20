@@ -1,13 +1,14 @@
 import { ChevronRight, ExternalLink, UserPlus } from 'lucide-react';
 import type { ReactNode } from 'react';
-import type { Bootstrap, Gift, Member, Room } from '../api/types';
+import type { Bootstrap, Gift, Member, Room, User } from '../api/types';
 import { Avatar } from '../components/Avatar';
 import { GiftThumb } from '../components/GiftThumb';
 import { Hero } from '../components/Hero';
 import { ProgressPills } from '../components/ProgressBar';
+import { SantaCard } from '../components/SantaCard';
 import { Segmented } from '../components/Segmented';
 import { Layer, useMainButton } from '../telegram/buttons';
-import { currencySymbol, formatMoney, fullName, linkHost, plural, pluralize } from '../utils/format';
+import { currencySymbol, formatMoney, fullName, linkHost, pluralize } from '../utils/format';
 
 export type HomeTab = 'mine' | 'friends';
 
@@ -24,9 +25,10 @@ interface Props {
   onOpenFriend: (member: Member) => void;
   onOpenRooms: () => void;
   onInvite: () => void;
+  onSanta: (action: 'open' | 'join' | 'leave' | 'draw' | 'cancel', budget?: number | null) => Promise<void>;
 }
 
-export function HomeScreen({ boot, tab, onTab, onAddGift, onEditGift, onOpenFriend, onOpenRooms, onInvite }: Props) {
+export function HomeScreen({ boot, tab, onTab, onAddGift, onEditGift, onOpenFriend, onOpenRooms, onInvite, onSanta }: Props) {
   const { room } = boot;
   const withGifts = boot.members.filter((m) => m.gift_count > 0);
 
@@ -59,14 +61,64 @@ export function HomeScreen({ boot, tab, onTab, onAddGift, onEditGift, onOpenFrie
         {tab === 'mine' ? (
           <MyWishlist boot={boot} onEditGift={onEditGift} onInvite={onInvite} />
         ) : (
-          <MembersList members={boot.members} onOpenFriend={onOpenFriend} onInvite={onInvite} />
+          <>
+            <SantaCard
+              room={room}
+              santa={boot.santa}
+              onAction={onSanta}
+              onOpenReceiver={(user: User) => {
+                const member = boot.members.find((m) => m.id === user.id);
+                if (member) onOpenFriend(member);
+              }}
+            />
+            <MembersList members={boot.members} onOpenFriend={onOpenFriend} onInvite={onInvite} />
+          </>
         )}
       </div>
     </div>
   );
 }
 
+function GiftRows({ gifts, onEditGift, dimmed = false }: { gifts: Gift[]; onEditGift: (g: Gift) => void; dimmed?: boolean }) {
+  return (
+    <div className={`overflow-hidden rounded-[16px] bg-card ${dimmed ? 'opacity-70' : ''}`}>
+      {gifts.map((g, i) => (
+        <button
+          key={g.id}
+          onClick={() => onEditGift(g)}
+          className="flex w-full items-center gap-3 pl-4 text-left active:bg-fill"
+          data-my-gift={g.title}
+        >
+          <span className="my-2.5">
+            <GiftThumb gift={g} size={48} radius={12} />
+          </span>
+          <span
+            className={`flex min-w-0 flex-1 items-center gap-3 self-stretch py-2.5 pr-4 ${i ? 'border-t border-separator' : ''}`}
+          >
+            <span className="min-w-0 flex-1">
+              <span className="line-clamp-2 text-[16px] leading-snug">
+                {g.must_have && <span title="Очень хочу">⭐ </span>}
+                {g.title}
+              </span>
+              {g.note && <span className="mt-0.5 line-clamp-1 block text-[13px] text-hint">{g.note}</span>}
+              {g.link && (
+                <span className="mt-0.5 flex items-center gap-1 text-[13px] text-hint">
+                  <ExternalLink size={12} /> {linkHost(g.link)}
+                </span>
+              )}
+            </span>
+            <span className="tabular shrink-0 text-[15px] font-semibold">{formatMoney(g.price)}</span>
+            <ChevronRight size={18} className="shrink-0 text-hint/70" />
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function MyWishlist({ boot, onEditGift, onInvite }: { boot: RoomBootstrap; onEditGift: (g: Gift) => void; onInvite: () => void }) {
+  const active = boot.gifts.filter((g) => !g.received);
+  const received = boot.gifts.filter((g) => g.received);
   if (boot.gifts.length === 0) {
     return (
       <div className="flex flex-col items-center px-6 pt-8 pb-4 text-center">
@@ -94,37 +146,19 @@ function MyWishlist({ boot, onEditGift, onInvite }: { boot: RoomBootstrap; onEdi
         </p>
       </div>
 
-      <div>
-        <SectionTitle>Мои подарки</SectionTitle>
-        <div className="overflow-hidden rounded-[16px] bg-card">
-          {boot.gifts.map((g, i) => (
-            <button
-              key={g.id}
-              onClick={() => onEditGift(g)}
-              className="flex w-full items-center gap-3 pl-4 text-left active:bg-fill"
-              data-my-gift={g.title}
-            >
-              <span className="my-2.5">
-                <GiftThumb gift={g} size={48} radius={12} />
-              </span>
-              <span
-                className={`flex min-w-0 flex-1 items-center gap-3 self-stretch py-2.5 pr-4 ${i ? 'border-t border-separator' : ''}`}
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="line-clamp-2 text-[16px] leading-snug">{g.title}</span>
-                  {g.link && (
-                    <span className="mt-0.5 flex items-center gap-1 text-[13px] text-hint">
-                      <ExternalLink size={12} /> {linkHost(g.link)}
-                    </span>
-                  )}
-                </span>
-                <span className="tabular shrink-0 text-[15px] font-semibold">{formatMoney(g.price)}</span>
-                <ChevronRight size={18} className="shrink-0 text-hint/70" />
-              </span>
-            </button>
-          ))}
+      {active.length > 0 && (
+        <div>
+          <SectionTitle>Мои подарки</SectionTitle>
+          <GiftRows gifts={active} onEditGift={onEditGift} />
         </div>
-      </div>
+      )}
+
+      {received.length > 0 && (
+        <div>
+          <SectionTitle>🎉 Мне это подарили</SectionTitle>
+          <GiftRows gifts={received} onEditGift={onEditGift} dimmed />
+        </div>
+      )}
 
       <button
         onClick={onInvite}
@@ -210,30 +244,40 @@ function MemberCard({ member: m, onClick }: { member: Member; onClick: () => voi
         <ProgressPills progress={m.progress} />
       </div>
       <div className="mt-2 text-[14px] text-hint">
-        {m.pool_count === 0 ? (
+        {m.purchase_status === 'bought' ? (
+          <b className="text-success">🎉 Подарок куплен — сбор закрыт</b>
+        ) : m.pool_count === 0 ? (
           'Все подарки уже кто-то дарит сам'
-        ) : m.funded_count > 0 ? (
+        ) : m.funded_count === m.pool_count ? (
+          <b className="text-success">✓ Хватает на все подарки — можно не скидываться</b>
+        ) : m.next_missing !== null && (m.funded_count > 0 || best > 0) ? (
           <>
-            Хватает на{' '}
-            <b className="text-text">
-              {m.funded_count} из {m.pool_count}
-            </b>{' '}
-            {plural(m.pool_count, ['подарка', 'подарков', 'подарков'])}
-          </>
-        ) : best > 0 ? (
-          <>
-            Ближайший подарок собран на <b className="tabular text-text">{best}%</b>
+            {m.funded_count > 0 && (
+              <>
+                Хватает на{' '}
+                <b className="text-text">
+                  {m.funded_count} из {m.pool_count}
+                </b>
+                .{' '}
+              </>
+            )}
+            До ближайшего не хватает <b className="tabular text-text">{formatMoney(m.next_missing)}</b>
           </>
         ) : (
           'Сбор ещё не начался — будьте первым'
         )}
-        {m.reserved_count > 0 && m.pool_count > 0 && (
+        {m.reserved_count > 0 && m.pool_count > 0 && m.purchase_status !== 'bought' && (
           <> · ещё {m.reserved_count} дарят сами</>
         )}
       </div>
 
-      {(m.my_pledge || m.picked.length > 0 || m.my_reserved_count > 0) && (
+      {(m.my_pledge || m.picked.length > 0 || m.my_reserved_count > 0 || m.purchase_status === 'buying') && (
         <div className="mt-3 flex flex-wrap gap-1.5">
+          {m.purchase_status === 'buying' && (
+            <span className="rounded-full bg-success/15 px-2.5 py-1 text-[13px] font-semibold text-success">
+              🛍 Подарок уже покупают
+            </span>
+          )}
           {m.my_pledge ? (
             <span className="tabular rounded-full bg-accent/12 px-2.5 py-1 text-[13px] font-semibold text-accent">
               Ваш вклад · {formatMoney(m.my_pledge)}

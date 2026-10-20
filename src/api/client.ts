@@ -1,5 +1,5 @@
 import { initData } from '../telegram/webapp';
-import type { Bootstrap, FriendPayload, Gift, GiftDraft, Room, RoomPreview } from './types';
+import type { Bootstrap, FriendPayload, Gift, GiftDraft, LinkPreview, Room, RoomPreview, SantaState } from './types';
 
 const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/+$/, '');
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY ?? '';
@@ -86,7 +86,12 @@ export const api = {
       p_price: gift.price,
       p_emoji: gift.emoji,
       p_link: gift.link.trim() || null,
+      p_note: gift.note.trim() || null,
+      p_must_have: gift.must_have,
     }),
+
+  setGiftReceived: (giftId: string, received: boolean) =>
+    rpc<Gift>('wl_set_gift_received', { p_gift_id: giftId, p_received: received }),
 
   /** image — data URL; пустая строка убирает фото */
   setGiftImage: (giftId: string, image: string) =>
@@ -111,31 +116,53 @@ export const api = {
   vote: (roomId: string, friendId: number, giftId: string, on: boolean) =>
     rpc<FriendPayload>('wl_vote', { p_room_id: roomId, p_friend_id: friendId, p_gift_id: giftId, p_on: on }),
 
+  /** take — «Я покупаю», release — отказаться, bought — «Куплено», reopen — вернуть */
+  poolPurchase: (roomId: string, friendId: number, action: 'take' | 'release' | 'bought' | 'reopen') =>
+    rpc<FriendPayload>('wl_pool_purchase', { p_room_id: roomId, p_friend_id: friendId, p_action: action }),
+
+  /** Тайный Санта: open (с бюджетом) | join | leave | draw | cancel */
+  santa: (roomId: string, action: 'open' | 'join' | 'leave' | 'draw' | 'cancel', budget: number | null = null) =>
+    rpc<SantaState | null>('wl_santa', { p_room_id: roomId, p_action: action, p_budget: budget }),
+
   /** ссылка на Telegram-группу участников сбора; пустая строка убирает */
   setPoolChat: (roomId: string, friendId: number, link: string) =>
     rpc<FriendPayload>('wl_set_pool_chat', { p_room_id: roomId, p_friend_id: friendId, p_link: link }),
 };
 
-/** Бот готовит кнопку для WebApp.requestChat и запасной start_param для ?startgroup= */
-export async function prepareChat(roomId: string, friendId: number) {
+async function callBot<T>(action: string, args: Record<string, unknown>): Promise<T> {
   let res: Response;
   try {
     res = await fetch(BOT_FUNCTION_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'prepare_chat', init_data: initData, room_id: roomId, friend_id: friendId }),
+      body: JSON.stringify({ action, init_data: initData, ...args }),
     });
   } catch {
     throw new ApiError('Бот не отвечает. Проверьте, что функция telegram-bot развёрнута', 0);
   }
-  const body = (await res.json().catch(() => ({}))) as { button_id?: string | null; start_param?: string; error?: string };
-  if (!res.ok || !body.start_param) {
+  const body = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) {
     throw new ApiError(
       body.error || (res.status === 404 ? 'Бот ещё не подключён: разверните функцию telegram-bot (см. README)' : `Ошибка бота (${res.status})`),
       res.status,
     );
   }
+  return body;
+}
+
+/** Бот готовит кнопку для WebApp.requestChat и запасной start_param для ?startgroup= */
+export async function prepareChat(roomId: string, friendId: number) {
+  const body = await callBot<{ button_id?: string | null; start_param?: string }>('prepare_chat', {
+    room_id: roomId,
+    friend_id: friendId,
+  });
+  if (!body.start_param) throw new ApiError('Бот не вернул данные для чата', 500);
   return { buttonId: body.button_id ?? null, startParam: body.start_param };
+}
+
+/** Название, цена и фото товара по ссылке — их достаёт бот */
+export function previewLink(url: string) {
+  return callBot<LinkPreview>('preview_link', { url });
 }
 
 export function errorMessage(err: unknown): string {

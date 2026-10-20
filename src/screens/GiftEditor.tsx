@@ -1,7 +1,7 @@
 import { useIsPresent } from 'framer-motion';
-import { ImagePlus, Link2, Loader2, Trash2 } from 'lucide-react';
+import { ImagePlus, Link2, Loader2, Star, Trash2 } from 'lucide-react';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
-import { api, errorMessage } from '../api/client';
+import { api, errorMessage, previewLink } from '../api/client';
 import { primeGiftImage, useGiftImage } from '../api/images';
 import type { Gift } from '../api/types';
 import { AmountInput } from '../components/AmountInput';
@@ -10,7 +10,7 @@ import { toast } from '../components/Toast';
 import { Layer, useMainButton } from '../telegram/buttons';
 import { confirmAction, hapticNotification, hapticSelection, openLink } from '../telegram/webapp';
 import { GIFT_EMOJIS, guessEmoji } from '../utils/emoji';
-import { currencySymbol } from '../utils/format';
+import { currencySymbol, currentCurrency } from '../utils/format';
 import { prepareGiftImage } from '../utils/image';
 
 interface Props {
@@ -30,6 +30,18 @@ export function GiftEditor({ roomId, open, gift, onClose, onSaved, onDeleted }: 
   );
 }
 
+/** «shopee.vn/x» и «https://shopee.vn/x» — ссылка; «наушники» — нет */
+function asUrl(raw: string): string | null {
+  const text = raw.trim();
+  if (!/^(https?:\/\/)?[^\s/]+\.[^\s]{2,}$/i.test(text)) return null;
+  return /^https?:\/\//i.test(text) ? text : `https://${text}`;
+}
+
+async function dataUrlToFile(dataUrl: string): Promise<File> {
+  const blob = await (await fetch(dataUrl)).blob();
+  return new File([blob], 'photo', { type: blob.type });
+}
+
 function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'onClose'>) {
   const isPresent = useIsPresent();
   const [title, setTitle] = useState(gift?.title ?? '');
@@ -37,15 +49,20 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
   const [emoji, setEmoji] = useState(gift?.emoji ?? '🎁');
   const [emojiTouched, setEmojiTouched] = useState(!!gift);
   const [link, setLink] = useState(gift?.link ?? '');
+  const [note, setNote] = useState(gift?.note ?? '');
+  const [mustHave, setMustHave] = useState(gift?.must_have ?? false);
   const [saving, setSaving] = useState(false);
   const [shake, setShake] = useState(0);
   // undefined — фото не трогали, null — убрали, строка — новое фото
   const existingPhoto = useGiftImage(gift?.id, gift?.image_rev);
   const [photo, setPhoto] = useState<string | null | undefined>(undefined);
   const [processing, setProcessing] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const previewedFor = useRef(gift?.link ?? '');
   const fileRef = useRef<HTMLInputElement>(null);
   const emojiRowRef = useRef<HTMLDivElement>(null);
   const preview = photo === undefined ? existingPhoto : photo;
+  const linkUrl = asUrl(link);
 
   // Подобранный по названию значок может оказаться за краем ряда — докручиваем к нему
   useEffect(() => {
@@ -56,14 +73,6 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
   }, [emoji]);
 
   const pickPhoto = () => fileRef.current?.click();
-
-  // Ссылку можно проверить прямо из редактора; без протокола достраиваем https://,
-  // как это делает и база при сохранении
-  const linkUrl = (() => {
-    const raw = link.trim();
-    if (!/^(https?:\/\/)?[^\s/]+\.[^\s]{2,}/i.test(raw)) return null;
-    return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  })();
 
   const onFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -86,6 +95,57 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
     if (!emojiTouched) setEmoji(guessEmoji(value) ?? '🎁');
   };
 
+  // Вставили ссылку — подставляем название, цену и фото, если их ещё нет
+  const autofill = async (value: string) => {
+    const url = asUrl(value);
+    if (!url || url === previewedFor.current) return;
+    if (title.trim() && price > 0 && preview) return;
+    previewedFor.current = url;
+    setPreviewing(true);
+    try {
+      const found = await previewLink(url);
+      const filled: string[] = [];
+      if (!title.trim() && found.title) {
+        onTitle(found.title);
+        filled.push('название');
+      }
+      const sameCurrency = !found.currency || found.currency === currentCurrency();
+      if (price <= 0 && found.price && sameCurrency) {
+        setPrice(found.price);
+        filled.push('цену');
+      }
+      if (!preview && found.image) {
+        try {
+          setPhoto(await prepareGiftImage(await dataUrlToFile(found.image)));
+          filled.push('фото');
+        } catch {
+          // фото не подошло — не страшно
+        }
+      }
+      if (filled.length) {
+        hapticSelection();
+        toast(`Подставили из ссылки: ${filled.join(', ')}`, 'success');
+      } else if (found.price && !sameCurrency) {
+        toast(`На сайте цена в ${found.currency} — укажите её в ${currencySymbol()}`);
+      } else if (!found.title) {
+        toast('Не нашли данные на странице — заполните вручную');
+      }
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  // при вводе — с паузой, при вставке и уходе из поля — сразу
+  useEffect(() => {
+    if (!asUrl(link)) return;
+    const timer = window.setTimeout(() => void autofill(link), 900);
+    return () => window.clearTimeout(timer);
+    // autofill читает актуальные поля на момент срабатывания
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link]);
+
   const save = async () => {
     if (!title.trim() || price <= 0) {
       hapticNotification('error');
@@ -95,7 +155,15 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
     }
     setSaving(true);
     try {
-      let saved = await api.saveGift(roomId, { id: gift?.id ?? null, title, price, emoji, link });
+      let saved = await api.saveGift(roomId, {
+        id: gift?.id ?? null,
+        title,
+        price,
+        emoji,
+        link,
+        note,
+        must_have: mustHave,
+      });
       if (photo !== undefined && (photo || saved.image_rev)) {
         try {
           saved = await api.setGiftImage(saved.id, photo ?? '');
@@ -112,6 +180,19 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
       toast(errorMessage(err), 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const toggleReceived = async () => {
+    if (!gift) return;
+    const on = !gift.received;
+    if (on && !(await confirmAction(`Отметить «${gift.title}» как подаренный? Друзья больше не будут на него скидываться.`))) return;
+    try {
+      const updated = await api.setGiftReceived(gift.id, on);
+      hapticNotification('success');
+      onSaved(updated);
+    } catch (err) {
+      toast(errorMessage(err), 'error');
     }
   };
 
@@ -142,6 +223,45 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
       }}
     >
       <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFile} data-photo-input />
+
+      {/* Ссылка первой: вставили — остальное заполнится само */}
+      <div className="overflow-hidden rounded-[14px] bg-card">
+        <label className="block px-4 pt-2.5 pb-1">
+          <span className="flex items-center gap-1 text-[12px] font-medium text-hint">
+            <Link2 size={13} /> Ссылка на товар
+            {previewing && (
+              <span className="ml-auto flex items-center gap-1 text-accent">
+                <Loader2 size={12} className="animate-spin" /> подтягиваем данные…
+              </span>
+            )}
+          </span>
+          <div className="flex items-center gap-2">
+            <input
+              name="link"
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+              onBlur={() => void autofill(link)}
+              placeholder="Вставьте — подставим название, цену и фото"
+              inputMode="url"
+              autoCapitalize="off"
+              autoComplete="off"
+              maxLength={500}
+              className="block w-full bg-transparent pb-1.5 text-[16px] outline-none placeholder:text-hint/70"
+            />
+            {linkUrl && (
+              <button
+                type="button"
+                onClick={() => openLink(linkUrl)}
+                data-open-link
+                className="shrink-0 pb-1.5 text-[14px] font-semibold text-link active:opacity-60"
+              >
+                Открыть
+              </button>
+            )}
+          </div>
+        </label>
+      </div>
+
       {preview ? (
         <div className="relative overflow-hidden rounded-[18px] bg-card" data-photo-preview>
           <img src={preview} alt="" className="h-[200px] w-full object-cover" />
@@ -163,7 +283,7 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
           </div>
         </div>
       ) : (
-        <div className="space-y-3 pt-1">
+        <div className="space-y-3">
           <div className="flex gap-3">
             <div
               key={emoji}
@@ -236,51 +356,62 @@ function GiftForm({ roomId, gift, onSaved, onDeleted }: Omit<Props, 'open' | 'on
               <span className="text-[17px] font-semibold text-hint">{currencySymbol()}</span>
             </div>
           </label>
+          <div className="mx-4 h-px bg-separator" />
+          <label className="block px-4 pt-2.5 pb-2">
+            <span className="text-[12px] font-medium text-hint">Комментарий — размер, цвет, модель</span>
+            <textarea
+              name="note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Например: чёрные, размер M"
+              maxLength={500}
+              rows={2}
+              className="block w-full resize-none bg-transparent text-[16px] leading-snug outline-none placeholder:text-hint/70"
+            />
+          </label>
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-[14px] bg-card">
-        <label className="block px-4 pt-2.5 pb-1">
-          <span className="flex items-center gap-1 text-[12px] font-medium text-hint">
-            <Link2 size={13} /> Ссылка на товар
-          </span>
-          <div className="flex items-center gap-2">
-            <input
-              name="link"
-              value={link}
-              onChange={(e) => setLink(e.target.value)}
-              placeholder="https://… — необязательно"
-              inputMode="url"
-              autoCapitalize="off"
-              autoComplete="off"
-              maxLength={500}
-              className="block w-full bg-transparent pb-1.5 text-[16px] outline-none placeholder:text-hint/70"
-            />
-            {linkUrl && (
-              <button
-                type="button"
-                onClick={() => openLink(linkUrl)}
-                data-open-link
-                className="shrink-0 pb-1.5 text-[14px] font-semibold text-link active:opacity-60"
-              >
-                Открыть
-              </button>
-            )}
-          </div>
-        </label>
-      </div>
+      <button
+        type="button"
+        onClick={() => {
+          hapticSelection();
+          setMustHave((v) => !v);
+        }}
+        data-must-have
+        aria-pressed={mustHave}
+        className={`flex w-full items-center gap-3 rounded-[14px] px-4 py-3 text-left transition ${
+          mustHave ? 'bg-gold/20 ring-2 ring-gold' : 'bg-card'
+        }`}
+      >
+        <Star size={20} className={mustHave ? 'fill-gold text-gold' : 'text-hint'} />
+        <span className="flex-1">
+          <span className="block text-[16px] font-medium">Очень хочу</span>
+          <span className="block text-[13px] text-hint">Друзья увидят, что этот подарок для вас самый желанный</span>
+        </span>
+      </button>
 
       {gift ? (
-        <button
-          type="button"
-          onClick={remove}
-          className="flex w-full items-center justify-center gap-2 rounded-[14px] bg-card py-3.5 text-[16px] font-medium text-destructive"
-        >
-          <Trash2 size={18} /> Удалить из вишлиста
-        </button>
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => void toggleReceived()}
+            data-received
+            className="flex w-full items-center justify-center gap-2 rounded-[14px] bg-card py-3.5 text-[16px] font-medium"
+          >
+            {gift.received ? '↩️ Вернуть в вишлист' : '🎉 Мне это подарили'}
+          </button>
+          <button
+            type="button"
+            onClick={remove}
+            className="flex w-full items-center justify-center gap-2 rounded-[14px] bg-card py-3.5 text-[16px] font-medium text-destructive"
+          >
+            <Trash2 size={18} /> Удалить из вишлиста
+          </button>
+        </div>
       ) : (
         <p className="px-2 text-center text-[13px] leading-snug text-hint">
-          По цене друзья поймут, хватает ли общего бюджета, а по ссылке — что именно купить
+          По цене друзья поймут, хватает ли общего бюджета, а по ссылке и комментарию — что именно купить
         </p>
       )}
       {/* Enter на клавиатуре отправляет форму */}

@@ -59,6 +59,11 @@ insert into app.settings (key, value)
 values ('init_data_max_age', '86400')
 on conflict (key) do nothing;
 
+-- часовой пояс для напоминаний перед Новым годом
+insert into app.settings (key, value)
+values ('reminder_timezone', 'Asia/Ho_Chi_Minh')
+on conflict (key) do nothing;
+
 -- секрет, которым Telegram подписывает запросы к вебхуку бота
 insert into app.settings (key, value)
 values ('webhook_secret', encode(extensions.gen_random_bytes(24), 'hex'))
@@ -109,6 +114,12 @@ create table if not exists app.gifts (
   price bigint not null check (price > 0 and price <= 1000000000000),
   emoji text not null default '🎁' check (char_length(emoji) between 1 and 16),
   link text check (link is null or char_length(link) <= 500),
+  -- размер, цвет, модель — чтобы купили именно то
+  note text check (note is null or char_length(note) <= 500),
+  -- «очень хочу»
+  must_have boolean not null default false,
+  -- владелец отметил «мне это подарили» — подарок выпадает из сборов
+  received_at timestamptz,
   -- версия фото (мс): меняется при каждой замене, null — фото нет
   image_rev bigint,
   created_at timestamptz not null default now(),
@@ -120,6 +131,10 @@ create table if not exists app.gifts (
 );
 
 create index if not exists gifts_room_owner_idx on app.gifts (room_id, owner_id, created_at);
+
+alter table app.gifts add column if not exists note text check (note is null or char_length(note) <= 500);
+alter table app.gifts add column if not exists must_have boolean not null default false;
+alter table app.gifts add column if not exists received_at timestamptz;
 
 -- Фото подарка: сжатый на клиенте JPEG/PNG/WebP в виде data URL. Хранится
 -- отдельно, чтобы списки и опрос шкал не тащили картинки — клиент
@@ -184,6 +199,50 @@ create table if not exists app.pool_chats (
 alter table app.pool_chats add column if not exists chat_id bigint;
 create unique index if not exists pool_chats_chat_id_idx on app.pool_chats (chat_id);
 
+-- Кто покупает подарок от сбора: один из участников берёт покупку на себя,
+-- потом отмечает «Куплено» — сбор закрывается. Если покупатель выходит из
+-- сбора, отметка пропадает вместе с его взносом.
+create table if not exists app.pool_purchases (
+  room_id uuid not null,
+  recipient_id bigint not null,
+  buyer_id bigint not null,
+  status text not null default 'buying' check (status in ('buying', 'bought')),
+  gift_ids uuid[] not null default '{}',
+  updated_at timestamptz not null default now(),
+  primary key (room_id, recipient_id),
+  foreign key (room_id, buyer_id, recipient_id)
+    references app.pledges (room_id, giver_id, recipient_id) on delete cascade
+);
+
+-- Журнал уведомлений бота (сами сообщения уходят через pg_net)
+create table if not exists app.notifications (
+  id bigint generated always as identity primary key,
+  user_id bigint not null,
+  text text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists notifications_user_idx on app.notifications (user_id, created_at);
+
+-- Тайный Санта: каждый участник дарит подарок одному случайному другому.
+-- Кому дарит, знает только он сам — даже создатель компании не видит.
+create table if not exists app.santa (
+  room_id uuid primary key references app.rooms (id) on delete cascade,
+  budget bigint check (budget is null or (budget > 0 and budget <= 1000000000000)),
+  status text not null default 'open' check (status in ('open', 'drawn')),
+  drawn_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists app.santa_members (
+  room_id uuid not null references app.santa (room_id) on delete cascade,
+  user_id bigint not null,
+  receiver_id bigint,
+  joined_at timestamptz not null default now(),
+  primary key (room_id, user_id),
+  foreign key (room_id, user_id) references app.room_members (room_id, user_id) on delete cascade
+);
+
 -- «Создать чат сбора»: request_id уходит в кнопку KeyboardButtonRequestChat
 -- и возвращается боту в chat_shared — так бот узнаёт, чей это сбор
 create table if not exists app.pool_chat_requests (
@@ -225,6 +284,10 @@ alter table app.votes enable row level security;
 alter table app.reservations enable row level security;
 alter table app.pool_chats enable row level security;
 alter table app.pool_chat_requests enable row level security;
+alter table app.pool_purchases enable row level security;
+alter table app.notifications enable row level security;
+alter table app.santa enable row level security;
+alter table app.santa_members enable row level security;
 
 -- ---------------------------------------------------------------------------
 -- Проверка Telegram initData
@@ -401,10 +464,11 @@ begin
   from app.pledges p
   where p.room_id = p_room_id and p.recipient_id = p_recipient_id;
 
+  -- в сборе только подарки, которые никто не дарит сам и которые ещё не подарены
   for r in
     select g.id, g.price
     from app.votes v
-    join app.gifts g on g.id = v.gift_id
+    join app.gifts g on g.id = v.gift_id and g.received_at is null
     where v.room_id = p_room_id and v.recipient_id = p_recipient_id
       and not exists (select 1 from app.reservations rv where rv.gift_id = g.id)
     group by g.id, g.price, g.created_at
@@ -416,6 +480,135 @@ begin
     end if;
   end loop;
   return v_picked;
+end;
+$$;
+
+-- Все участники сбора проголосовали хотя бы за один подарок
+create or replace function app.pool_decided(p_room_id uuid, p_recipient_id bigint)
+returns boolean
+language sql
+stable
+set search_path = ''
+as $$
+  select s.n > 0 and v.n = s.n
+  from (
+    select count(*) as n from app.pledges p
+    where p.room_id = p_room_id and p.recipient_id = p_recipient_id
+  ) s,
+  (
+    select count(distinct vt.voter_id) as n
+    from app.votes vt
+    join app.gifts g on g.id = vt.gift_id and g.received_at is null
+    where vt.room_id = p_room_id and vt.recipient_id = p_recipient_id
+      and not exists (select 1 from app.reservations rv where rv.gift_id = vt.gift_id)
+  ) v;
+$$;
+
+-- Подарки общего сбора, на которые уже хватает
+create or replace function app.pool_funded(p_room_id uuid, p_recipient_id bigint)
+returns uuid[]
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce(array_agg(g.id order by g.price), '{}')
+  from app.gifts g
+  where g.room_id = p_room_id and g.owner_id = p_recipient_id and g.received_at is null
+    and not exists (select 1 from app.reservations rv where rv.gift_id = g.id)
+    and g.price <= (
+      select coalesce(sum(p.amount), 0) from app.pledges p
+      where p.room_id = p_room_id and p.recipient_id = p_recipient_id
+    );
+$$;
+
+create or replace function app.gift_titles(p_ids uuid[])
+returns text
+language sql
+stable
+set search_path = ''
+as $$
+  select string_agg(g.emoji || ' ' || g.title, ', ' order by g.price)
+  from app.gifts g
+  where g.id = any (p_ids);
+$$;
+
+create or replace function app.days_text(p_days integer)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select p_days || ' ' || case
+    when p_days % 100 between 11 and 14 then 'дней'
+    when p_days % 10 = 1 then 'день'
+    when p_days % 10 between 2 and 4 then 'дня'
+    else 'дней'
+  end;
+$$;
+
+-- Сообщение от бота в личку. Пишется в журнал и, если есть pg_net и токен,
+-- уходит в Telegram после коммита. Ошибки не ломают основное действие.
+create or replace function app.notify(p_user_id bigint, p_text text)
+returns void
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_token text;
+begin
+  insert into app.notifications (user_id, text) values (p_user_id, p_text);
+  select s.value into v_token from app.settings s where s.key = 'bot_token';
+  if v_token is null or not exists (
+    select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'net' and p.proname = 'http_post'
+  ) then
+    return;
+  end if;
+  execute 'select net.http_post(url := $1, body := $2, headers := $3)'
+    using 'https://api.telegram.org/bot' || v_token || '/sendMessage',
+          jsonb_build_object('chat_id', p_user_id, 'text', p_text, 'disable_web_page_preview', true),
+          '{"Content-Type": "application/json"}'::jsonb;
+exception when others then
+  raise notice 'notify failed: %', sqlerrm;
+end;
+$$;
+
+-- Всем участникам сбора, кроме p_except
+create or replace function app.notify_pool(p_room_id uuid, p_recipient_id bigint, p_except bigint, p_text text)
+returns void
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  r record;
+begin
+  for r in
+    select p.giver_id from app.pledges p
+    where p.room_id = p_room_id and p.recipient_id = p_recipient_id and p.giver_id is distinct from p_except
+  loop
+    perform app.notify(r.giver_id, p_text);
+  end loop;
+end;
+$$;
+
+-- Всем участникам компании, кроме p_except
+create or replace function app.notify_room(p_room_id uuid, p_except bigint, p_text text)
+returns void
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  r record;
+begin
+  for r in
+    select m.user_id from app.room_members m
+    where m.room_id = p_room_id and m.user_id is distinct from p_except
+  loop
+    perform app.notify(r.user_id, p_text);
+  end loop;
 end;
 $$;
 
@@ -446,6 +639,9 @@ as $$
     'price', p_gift.price,
     'emoji', p_gift.emoji,
     'link', p_gift.link,
+    'note', p_gift.note,
+    'must_have', p_gift.must_have,
+    'received', p_gift.received_at is not null,
     'image_rev', p_gift.image_rev,
     'created_at', p_gift.created_at
   );
@@ -467,11 +663,41 @@ as $$
   );
 $$;
 
+create or replace function app.santa_json(p_room_id uuid, p_me bigint)
+returns jsonb
+language sql
+stable
+set search_path = ''
+as $$
+  select jsonb_build_object(
+    'status', s.status,
+    'budget', s.budget,
+    'participants', coalesce((
+      select jsonb_agg(app.user_json(u) order by sm.joined_at, u.id)
+      from app.santa_members sm
+      join app.users u on u.id = sm.user_id
+      where sm.room_id = s.room_id
+    ), '[]'::jsonb),
+    'joined', exists (select 1 from app.santa_members sm where sm.room_id = s.room_id and sm.user_id = p_me),
+    -- кому дарю я — больше никому это не отдаётся
+    'receiver', (
+      select app.user_json(u)
+      from app.santa_members sm
+      join app.users u on u.id = sm.receiver_id
+      join app.room_members rm on rm.room_id = sm.room_id and rm.user_id = sm.receiver_id
+      where sm.room_id = s.room_id and sm.user_id = p_me
+    )
+  )
+  from app.santa s
+  where s.room_id = p_room_id;
+$$;
+
 -- Всё, что видит участник на странице чужого вишлиста. Сумм, числа
 -- скинувшихся и имён голосовавших здесь нет — только проценты:
 --   pct        — собрано от цены вместе с моим взносом;
 --   others_pct — собрано без моего взноса (для предпросмотра суммы);
 --   funded     — хватает ли уже на подарок;
+--   missing / others_missing — сколько ещё не хватает (с моим взносом и без);
 --   vote_pct   — доля участников сбора, проголосовавших за подарок;
 --   picked     — подарок входит в итоговый набор;
 --   reserved / reserved_by_me — подарок кто-то дарит сам / это я.
@@ -494,18 +720,19 @@ as $$
   tally as (
     select v.gift_id, count(*) as n, bool_or(v.voter_id = p_me) as mine
     from app.votes v
+    join app.gifts g on g.id = v.gift_id and g.received_at is null
     where v.room_id = p_room_id and v.recipient_id = p_friend
       and not exists (select 1 from app.reservations r where r.gift_id = v.gift_id)
     group by v.gift_id
   ),
-  voters as (
-    select count(distinct v.voter_id) as n
-    from app.votes v
-    where v.room_id = p_room_id and v.recipient_id = p_friend
-      and not exists (select 1 from app.reservations r where r.gift_id = v.gift_id)
-  ),
   picked as (
     select app.picked_gifts(p_room_id, p_friend) as ids
+  ),
+  purchase as (
+    select pp.*, app.user_json(b) as buyer
+    from app.pool_purchases pp
+    join app.users b on b.id = pp.buyer_id
+    where pp.room_id = p_room_id and pp.recipient_id = p_friend
   )
   select jsonb_build_object(
     'friend', app.user_json(u),
@@ -514,7 +741,7 @@ as $$
       where p.room_id = p_room_id and p.recipient_id = p_friend and p.giver_id = p_me
     ),
     -- все участники сбора проголосовали хотя бы за один подарок
-    'decided', pool.supporters > 0 and voters.n = pool.supporters,
+    'decided', app.pool_decided(p_room_id, p_friend),
     -- участники сбора и ссылка на их чат — только для самих участников
     'supporters', case when pool.i_support then (
       select jsonb_agg(app.user_json(s) || jsonb_build_object('is_me', s.id = p_me) order by p.created_at, s.id)
@@ -532,14 +759,30 @@ as $$
       from app.pool_chats c
       where c.room_id = p_room_id and c.recipient_id = p_friend
     ) end,
+    -- кто покупает и что; имя покупателя — только участникам сбора
+    'purchase', (
+      select jsonb_build_object(
+        'status', pc.status,
+        'buyer', case when pool.i_support then pc.buyer end,
+        'is_me', pc.buyer_id = p_me,
+        'gifts', coalesce((
+          select jsonb_agg(jsonb_build_object('id', g.id, 'emoji', g.emoji, 'title', g.title) order by g.price)
+          from app.gifts g where g.id = any (pc.gift_ids)
+        ), '[]'::jsonb)
+      )
+      from purchase pc
+    ),
     'gifts', coalesce((
       select jsonb_agg(
         app.gift_json(g) || jsonb_build_object(
           'pct', app.pct(pool.total, g.price),
           'others_pct', app.pct(pool.total - pool.mine, g.price),
           'funded', pool.total >= g.price,
+          -- сколько ещё не хватает: со мной и без моего взноса (для предпросмотра)
+          'missing', greatest(g.price - pool.total, 0),
+          'others_missing', greatest(g.price - (pool.total - pool.mine), 0),
           -- доля участников сбора, проголосовавших за подарок
-          'vote_pct', case when pool.supporters > 0 and rv.gift_id is null
+          'vote_pct', case when pool.supporters > 0 and rv.gift_id is null and g.received_at is null
             then round(coalesce(t.n, 0) * 100.0 / pool.supporters)::integer end,
           'my_vote', coalesce(t.mine, false),
           'picked', g.id = any (picked.ids),
@@ -554,7 +797,7 @@ as $$
       where g.room_id = p_room_id and g.owner_id = p_friend
     ), '[]'::jsonb)
   )
-  from app.users u, pool, voters, picked
+  from app.users u, pool, picked
   where u.id = p_friend;
 $$;
 
@@ -612,6 +855,7 @@ begin
     'has_supporters', exists (
       select 1 from app.pledges p where p.room_id = v_room.id and p.recipient_id = v_me
     ),
+    'santa', case when v_room.id is not null then app.santa_json(v_room.id, v_me) end,
     'members', coalesce((
       select jsonb_agg(
         app.user_json(u) || jsonb_build_object(
@@ -622,6 +866,12 @@ begin
           'pool_count', gs.pool_count,
           'reserved_count', gs.reserved_count,
           'my_reserved_count', gs.my_reserved_count,
+          -- до ближайшего подарка из сбора не хватает (null — хватает на всё)
+          'next_missing', gs.next_missing,
+          'purchase_status', (
+            select pp.status from app.pool_purchases pp
+            where pp.room_id = m.room_id and pp.recipient_id = u.id
+          ),
           'my_pledge', mine.amount,
           'picked', coalesce((
             select jsonb_agg(jsonb_build_object('id', pg.id, 'emoji', pg.emoji, 'title', pg.title) order by pg.price)
@@ -642,13 +892,14 @@ begin
         select
           count(*) as gift_count,
           min(g.price) as min_price,
-          -- забронированные подарки дарят отдельно — в прогресс сбора не входят
+          -- забронированные и уже подаренные подарки в прогресс сбора не входят
           jsonb_agg(app.pct(pl.total, g.price) order by g.price, g.created_at)
-            filter (where rv.gift_id is null) as progress,
-          count(*) filter (where rv.gift_id is null and g.price <= pl.total) as funded_count,
-          count(*) filter (where rv.gift_id is null) as pool_count,
-          count(rv.gift_id) as reserved_count,
-          count(*) filter (where rv.reserver_id = v_me) as my_reserved_count
+            filter (where rv.gift_id is null and g.received_at is null) as progress,
+          count(*) filter (where rv.gift_id is null and g.received_at is null and g.price <= pl.total) as funded_count,
+          count(*) filter (where rv.gift_id is null and g.received_at is null) as pool_count,
+          count(rv.gift_id) filter (where g.received_at is null) as reserved_count,
+          count(*) filter (where rv.reserver_id = v_me and g.received_at is null) as my_reserved_count,
+          min(g.price - pl.total) filter (where rv.gift_id is null and g.received_at is null and g.price > pl.total) as next_missing
         from app.gifts g
         left join app.reservations rv on rv.gift_id = g.id
         where g.room_id = m.room_id and g.owner_id = u.id
@@ -759,6 +1010,10 @@ begin
       raise exception 'Можно состоять максимум в 30 компаниях';
     end if;
     insert into app.room_members (room_id, user_id) values (v_room.id, v_me);
+    perform app.notify_room(v_room.id, v_me, format(
+      '👋 %s теперь в «%s». Загляните в приложение — может, пора собрать вишлист',
+      (select u.first_name from app.users u where u.id = v_me), v_room.name
+    ));
   end if;
 
   update app.users u set last_room_id = v_room.id where u.id = v_me;
@@ -809,7 +1064,10 @@ create or replace function public.wl_save_gift(
   p_title text,
   p_price bigint,
   p_emoji text,
-  p_link text
+  p_link text,
+  -- необязательные: старые клиенты их не присылают
+  p_note text default null,
+  p_must_have boolean default false
 )
 returns jsonb
 language plpgsql
@@ -822,6 +1080,8 @@ declare
   v_title text := btrim(coalesce(p_title, ''));
   v_emoji text := coalesce(nullif(btrim(p_emoji), ''), '🎁');
   v_link text := nullif(btrim(coalesce(p_link, '')), '');
+  v_note text := nullif(btrim(coalesce(p_note, '')), '');
+  v_first boolean;
   v_gift app.gifts;
 begin
   perform app.require_member(p_room_id, v_me);
@@ -847,17 +1107,29 @@ begin
   if char_length(v_link) > 500 then
     raise exception 'Ссылка слишком длинная';
   end if;
+  if char_length(v_note) > 500 then
+    raise exception 'Комментарий — до 500 символов';
+  end if;
 
   if p_gift_id is null then
     if (select count(*) from app.gifts g where g.room_id = p_room_id and g.owner_id = v_me) >= 30 then
       raise exception 'В вишлисте может быть до 30 подарков';
     end if;
-    insert into app.gifts (room_id, owner_id, title, price, emoji, link)
-    values (p_room_id, v_me, v_title, p_price, v_emoji, v_link)
+    v_first := not exists (select 1 from app.gifts g where g.room_id = p_room_id and g.owner_id = v_me);
+    insert into app.gifts (room_id, owner_id, title, price, emoji, link, note, must_have)
+    values (p_room_id, v_me, v_title, p_price, v_emoji, v_link, v_note, coalesce(p_must_have, false))
     returning * into v_gift;
+    if v_first then
+      perform app.notify_room(p_room_id, v_me, format(
+        '🎁 У %s появился вишлист в «%s». Загляните — можно скинуться вместе',
+        (select u.first_name from app.users u where u.id = v_me),
+        (select r.name from app.rooms r where r.id = p_room_id)
+      ));
+    end if;
   else
     update app.gifts g
-       set title = v_title, price = p_price, emoji = v_emoji, link = v_link, updated_at = now()
+       set title = v_title, price = p_price, emoji = v_emoji, link = v_link,
+           note = v_note, must_have = coalesce(p_must_have, false), updated_at = now()
      where g.id = p_gift_id and g.owner_id = v_me and g.room_id = p_room_id
     returning * into v_gift;
     if not found then
@@ -865,6 +1137,33 @@ begin
     end if;
   end if;
 
+  return app.gift_json(v_gift);
+end;
+$$;
+
+-- «Мне это подарили»: подарок выпадает из сборов, голосов и броней
+create or replace function public.wl_set_gift_received(p_init_data text, p_gift_id uuid, p_received boolean)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_me bigint := app.auth(p_init_data);
+  v_gift app.gifts;
+begin
+  update app.gifts g
+     set received_at = case when coalesce(p_received, true) then coalesce(g.received_at, now()) end,
+         updated_at = now()
+   where g.id = p_gift_id and g.owner_id = v_me
+  returning * into v_gift;
+  if not found then
+    raise exception 'Подарок не найден';
+  end if;
+  if v_gift.received_at is not null then
+    delete from app.votes v where v.gift_id = p_gift_id;
+  end if;
   return app.gift_json(v_gift);
 end;
 $$;
@@ -1003,6 +1302,8 @@ set search_path = ''
 as $$
 declare
   v_me bigint := app.auth(p_init_data);
+  v_before uuid[];
+  v_new uuid[];
 begin
   perform app.require_member(p_room_id, v_me);
   if p_friend_id = v_me then
@@ -1011,6 +1312,14 @@ begin
   if not exists (select 1 from app.room_members m where m.room_id = p_room_id and m.user_id = p_friend_id) then
     raise exception 'Участник не найден в этой компании';
   end if;
+  if exists (
+    select 1 from app.pool_purchases pp
+    where pp.room_id = p_room_id and pp.recipient_id = p_friend_id and pp.status = 'bought'
+  ) then
+    raise exception 'Подарок уже куплен — сбор закрыт';
+  end if;
+
+  v_before := app.pool_funded(p_room_id, p_friend_id);
 
   if coalesce(p_amount, 0) <= 0 then
     delete from app.pledges p
@@ -1025,11 +1334,23 @@ begin
       set amount = excluded.amount, updated_at = now();
   end if;
 
+  -- на что стало хватать — сообщаем остальным участникам сбора
+  select coalesce(array_agg(x), '{}') into v_new
+  from unnest(app.pool_funded(p_room_id, p_friend_id)) x
+  where x <> all (v_before);
+  if cardinality(v_new) > 0 then
+    perform app.notify_pool(p_room_id, p_friend_id, v_me, format(
+      '✅ Сбор на подарок (кому: %s): уже хватает на %s',
+      (select u.first_name from app.users u where u.id = p_friend_id), app.gift_titles(v_new)
+    ));
+  end if;
+
   return app.friend_payload(p_room_id, v_me, p_friend_id);
 end;
 $$;
 
 -- Голос за подарок, который покупаем. null — отозвать голос.
+-- Голос за подарок (p_on = true) или его отмена. Можно голосовать за несколько.
 -- Голос за подарок (p_on = true) или его отмена. Можно голосовать за несколько.
 create or replace function public.wl_vote(p_init_data text, p_room_id uuid, p_friend_id bigint, p_gift_id uuid, p_on boolean)
 returns jsonb
@@ -1040,8 +1361,17 @@ set search_path = ''
 as $$
 declare
   v_me bigint := app.auth(p_init_data);
+  v_was_decided boolean;
 begin
   perform app.require_member(p_room_id, v_me);
+  if exists (
+    select 1 from app.pool_purchases pp
+    where pp.room_id = p_room_id and pp.recipient_id = p_friend_id and pp.status = 'bought'
+  ) then
+    raise exception 'Подарок уже куплен — голосование закрыто';
+  end if;
+  v_was_decided := app.pool_decided(p_room_id, p_friend_id);
+
   if coalesce(p_on, true) then
     if not exists (
       select 1 from app.pledges p
@@ -1055,6 +1385,9 @@ begin
     ) then
       raise exception 'Подарок не найден';
     end if;
+    if exists (select 1 from app.gifts g where g.id = p_gift_id and g.received_at is not null) then
+      raise exception 'Этот подарок уже подарили';
+    end if;
     if exists (select 1 from app.reservations r where r.gift_id = p_gift_id) then
       raise exception 'Этот подарок уже кто-то дарит сам — выберите другой';
     end if;
@@ -1067,7 +1400,182 @@ begin
        and v.recipient_id = p_friend_id and v.gift_id = p_gift_id;
   end if;
 
+  if not v_was_decided and app.pool_decided(p_room_id, p_friend_id) then
+    perform app.notify_pool(p_room_id, p_friend_id, v_me, format(
+      '🗳 Все проголосовали (кому: %s): %s. Кто возьмёт покупку на себя? Откройте сбор в приложении',
+      (select u.first_name from app.users u where u.id = p_friend_id),
+      coalesce('покупаем ' || app.gift_titles(app.picked_gifts(p_room_id, p_friend_id)),
+               'на выбранные подарки пока не хватает')
+    ));
+  end if;
+
   return app.friend_payload(p_room_id, v_me, p_friend_id);
+end;
+$$;
+
+-- «Я покупаю» / «Отказаться» / «Куплено» / «Вернуть»: p_action = take | release | bought | reopen
+create or replace function public.wl_pool_purchase(p_init_data text, p_room_id uuid, p_friend_id bigint, p_action text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_me bigint := app.auth(p_init_data);
+  v_purchase app.pool_purchases;
+  v_me_name text;
+  v_friend_name text;
+  v_gifts uuid[];
+begin
+  perform app.require_member(p_room_id, v_me);
+  if not exists (
+    select 1 from app.pledges p
+    where p.room_id = p_room_id and p.giver_id = v_me and p.recipient_id = p_friend_id
+  ) then
+    raise exception 'Покупку берут на себя участники сбора';
+  end if;
+  select u.first_name into v_me_name from app.users u where u.id = v_me;
+  select u.first_name into v_friend_name from app.users u where u.id = p_friend_id;
+  select pp.* into v_purchase from app.pool_purchases pp
+  where pp.room_id = p_room_id and pp.recipient_id = p_friend_id;
+
+  if p_action = 'take' then
+    if v_purchase.buyer_id is not null and v_purchase.buyer_id <> v_me then
+      raise exception 'Покупку уже взял(а) %', (select u.first_name from app.users u where u.id = v_purchase.buyer_id);
+    end if;
+    v_gifts := app.picked_gifts(p_room_id, p_friend_id);
+    if cardinality(v_gifts) = 0 then
+      if exists (select 1 from app.votes v where v.room_id = p_room_id and v.recipient_id = p_friend_id) then
+        raise exception 'На выбранные подарки пока не хватает — дождитесь взносов или проголосуйте за другое';
+      end if;
+      raise exception 'Сначала проголосуйте: пока не выбрано, что покупать';
+    end if;
+    insert into app.pool_purchases (room_id, recipient_id, buyer_id, status, gift_ids)
+    values (p_room_id, p_friend_id, v_me, 'buying', v_gifts)
+    on conflict (room_id, recipient_id) do update
+      set gift_ids = excluded.gift_ids, status = 'buying', updated_at = now();
+    perform app.notify_pool(p_room_id, p_friend_id, v_me, format(
+      '🛍 %s берёт на себя покупку (кому: %s): %s. Договоритесь в чате сбора, как скинуться',
+      v_me_name, v_friend_name, app.gift_titles(v_gifts)
+    ));
+  elsif p_action in ('release', 'bought', 'reopen') then
+    if v_purchase.buyer_id is distinct from v_me then
+      raise exception 'Это может сделать только тот, кто покупает';
+    end if;
+    if p_action = 'release' then
+      delete from app.pool_purchases pp where pp.room_id = p_room_id and pp.recipient_id = p_friend_id;
+      perform app.notify_pool(p_room_id, p_friend_id, v_me, format(
+        '↩️ %s больше не покупает подарок (кому: %s) — кто-то может взять покупку на себя', v_me_name, v_friend_name
+      ));
+    elsif p_action = 'bought' then
+      update app.pool_purchases pp set status = 'bought', updated_at = now()
+       where pp.room_id = p_room_id and pp.recipient_id = p_friend_id;
+      perform app.notify_pool(p_room_id, p_friend_id, v_me, format(
+        '🎉 Подарок куплен (кому: %s): %s. Спасибо, что скинулись!', v_friend_name, app.gift_titles(v_purchase.gift_ids)
+      ));
+    else
+      update app.pool_purchases pp set status = 'buying', updated_at = now()
+       where pp.room_id = p_room_id and pp.recipient_id = p_friend_id;
+    end if;
+  else
+    raise exception 'Неизвестное действие';
+  end if;
+
+  return app.friend_payload(p_room_id, v_me, p_friend_id);
+end;
+$$;
+
+-- Тайный Санта: p_action = open (создатель компании, с бюджетом) | join | leave |
+-- draw (создатель, от трёх участников) | cancel (создатель)
+create or replace function public.wl_santa(p_init_data text, p_room_id uuid, p_action text, p_budget bigint)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_me bigint := app.auth(p_init_data);
+  v_room app.rooms;
+  v_santa app.santa;
+  v_count integer;
+  r record;
+begin
+  perform app.require_member(p_room_id, v_me);
+  select ro.* into v_room from app.rooms ro where ro.id = p_room_id;
+  select sa.* into v_santa from app.santa sa where sa.room_id = p_room_id;
+
+  if p_action in ('open', 'draw', 'cancel') and v_room.owner_id is distinct from v_me then
+    raise exception 'Тайного Санту запускает создатель компании';
+  end if;
+
+  if p_action = 'open' then
+    if v_santa.status = 'drawn' then
+      raise exception 'Жеребьёвка уже прошла';
+    end if;
+    if p_budget is not null and (p_budget <= 0 or p_budget > 1000000000000) then
+      raise exception 'Укажите бюджет больше нуля';
+    end if;
+    insert into app.santa (room_id, budget) values (p_room_id, p_budget)
+    on conflict (room_id) do update set budget = excluded.budget;
+    insert into app.santa_members (room_id, user_id) values (p_room_id, v_me) on conflict do nothing;
+    if v_santa.room_id is null then
+      perform app.notify_room(p_room_id, v_me, format(
+        '🎅 В «%s» начался Тайный Санта%s. Откройте приложение и нажмите «Участвую»',
+        v_room.name, coalesce(' — бюджет до ' || p_budget || ' ' || v_room.currency, '')
+      ));
+    end if;
+  elsif p_action in ('join', 'leave') then
+    if v_santa.room_id is null then
+      raise exception 'Тайный Санта ещё не начался';
+    end if;
+    if v_santa.status = 'drawn' then
+      raise exception 'Жеребьёвка уже прошла';
+    end if;
+    if p_action = 'join' then
+      insert into app.santa_members (room_id, user_id) values (p_room_id, v_me) on conflict do nothing;
+    else
+      delete from app.santa_members sm where sm.room_id = p_room_id and sm.user_id = v_me;
+    end if;
+  elsif p_action = 'draw' then
+    if v_santa.room_id is null or v_santa.status = 'drawn' then
+      raise exception 'Сначала откройте набор участников';
+    end if;
+    select count(*) into v_count from app.santa_members sm where sm.room_id = p_room_id;
+    if v_count < 3 then
+      raise exception 'Для жеребьёвки нужно хотя бы три участника';
+    end if;
+    -- случайный порядок по кругу: каждый дарит следующему, сам себе — никто
+    with ordered as (
+      select sm.user_id, row_number() over (order by random()) as rn, count(*) over () as n
+      from app.santa_members sm
+      where sm.room_id = p_room_id
+    )
+    update app.santa_members sm
+       set receiver_id = nxt.user_id
+      from ordered cur
+      join ordered nxt on nxt.rn = (cur.rn % cur.n) + 1
+     where sm.room_id = p_room_id and sm.user_id = cur.user_id;
+    update app.santa sa set status = 'drawn', drawn_at = now() where sa.room_id = p_room_id;
+    for r in
+      select sm.user_id, u.first_name
+      from app.santa_members sm
+      join app.users u on u.id = sm.receiver_id
+      where sm.room_id = p_room_id
+    loop
+      perform app.notify(r.user_id, format(
+        '🎅 Тайный Санта в «%s»: вы дарите подарок — %s. Это секрет! Вишлист — в приложении%s',
+        v_room.name, r.first_name, coalesce(', бюджет до ' || v_santa.budget || ' ' || v_room.currency, '')
+      ));
+    end loop;
+  elsif p_action = 'cancel' then
+    delete from app.santa sa where sa.room_id = p_room_id;
+  else
+    raise exception 'Неизвестное действие';
+  end if;
+
+  return app.santa_json(p_room_id, v_me);
 end;
 $$;
 
@@ -1132,6 +1640,9 @@ begin
   if v_gift.owner_id = v_me then
     raise exception 'Свой подарок бронировать не нужно 🙂';
   end if;
+  if coalesce(p_reserve, true) and v_gift.received_at is not null then
+    raise exception 'Этот подарок уже подарили';
+  end if;
 
   if coalesce(p_reserve, true) then
     select r.reserver_id into v_reserver from app.reservations r where r.gift_id = p_gift_id;
@@ -1155,6 +1666,82 @@ begin
   end if;
 
   return app.friend_payload(p_room_id, v_me, v_gift.owner_id);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Напоминания перед Новым годом: за 14, 7, 3 и 1 день — пустым вишлистам и
+-- незакрытым сборам. Запускается ежедневно через pg_cron (ниже).
+-- ---------------------------------------------------------------------------
+
+create or replace function app.daily_reminders(p_today date default null)
+returns integer
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_tz text;
+  v_today date;
+  v_days integer;
+  v_sent integer := 0;
+  r record;
+begin
+  select coalesce((select s.value from app.settings s where s.key = 'reminder_timezone'), 'UTC') into v_tz;
+  v_today := coalesce(p_today, (now() at time zone v_tz)::date);
+  v_days := make_date(extract(year from v_today)::integer + 1, 1, 1) - v_today;
+  if v_days not in (14, 7, 3, 1) then
+    return 0;
+  end if;
+
+  -- пустой вишлист в компании, где есть ещё кто-то
+  for r in
+    select m.user_id, ro.name
+    from app.room_members m
+    join app.rooms ro on ro.id = m.room_id
+    where not exists (
+      select 1 from app.gifts g
+      where g.room_id = m.room_id and g.owner_id = m.user_id and g.received_at is null
+    )
+      and exists (select 1 from app.room_members o where o.room_id = m.room_id and o.user_id <> m.user_id)
+  loop
+    perform app.notify(r.user_id, format(
+      '🎄 До Нового года %s, а ваш вишлист в «%s» пока пустой. Добавьте пару желаний — друзьям будет из чего выбрать',
+      app.days_text(v_days), r.name
+    ));
+    v_sent := v_sent + 1;
+  end loop;
+
+  -- участник незакрытого сбора
+  for r in
+    select p.giver_id, u.first_name, ro.name
+    from app.pledges p
+    join app.users u on u.id = p.recipient_id
+    join app.rooms ro on ro.id = p.room_id
+    where not exists (
+      select 1 from app.pool_purchases pp
+      where pp.room_id = p.room_id and pp.recipient_id = p.recipient_id and pp.status = 'bought'
+    )
+  loop
+    perform app.notify(r.giver_id, format(
+      '⏰ До Нового года %s. Сбор на подарок (кому: %s, «%s») ещё не закрыт — договоритесь, кто покупает',
+      app.days_text(v_days), r.first_name, r.name
+    ));
+    v_sent := v_sent + 1;
+  end loop;
+
+  return v_sent;
+end;
+$$;
+
+do $$
+begin
+  create extension if not exists pg_cron;
+  perform cron.unschedule(j.jobid) from cron.job j where j.jobname = 'wishlist-reminders';
+  -- 03:00 UTC: утро во Вьетнаме и в Москве
+  perform cron.schedule('wishlist-reminders', '0 3 * * *', 'select app.daily_reminders()');
+exception when others then
+  raise notice 'pg_cron недоступен — напоминания не запланированы';
 end;
 $$;
 

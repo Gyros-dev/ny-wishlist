@@ -1,5 +1,5 @@
 import { motion, useIsPresent } from 'framer-motion';
-import { Check, ExternalLink, Loader2, Lock } from 'lucide-react';
+import { Check, ExternalLink, Loader2, Lock, MessageCircle } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage, prepareChat } from '../api/client';
 import type { FriendGift, FriendPayload, Member, Supporter } from '../api/types';
@@ -58,13 +58,13 @@ function giftView(gift: FriendGift, draft: number | null) {
       minePct: Math.max(0, gift.pct - gift.others_pct),
       pct: gift.pct,
       funded: gift.funded,
+      missing: gift.missing,
     };
   }
-  const minePct = (draft * 100) / gift.price;
-  const total = gift.others_pct + minePct;
-  // others_pct округлён вниз до процента — допускаем эту погрешность
-  const funded = total >= 99.95;
-  return { othersPct: gift.others_pct, minePct, pct: funded ? 100 : Math.floor(total), funded };
+  const missing = Math.max(0, gift.others_missing - draft);
+  const funded = missing === 0;
+  const pct = funded ? 100 : Math.min(99, Math.floor(((gift.price - missing) * 100) / gift.price));
+  return { othersPct: gift.others_pct, minePct: (draft * 100) / gift.price, pct, funded, missing };
 }
 
 export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onForbidden }: Props) {
@@ -80,6 +80,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
   const [photo, setPhoto] = useState<{ src: string; caption: string } | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
   const [creatingChat, setCreatingChat] = useState(false);
+  const [purchaseBusy, setPurchaseBusy] = useState(false);
 
   // Ответы опроса могут прийти позже ответа на действие пользователя —
   // применяем только то, что отправлено не раньше последнего применённого.
@@ -130,12 +131,19 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
   const saved = data?.my_pledge ?? 0;
   const changed = dirty && draft !== saved;
   const allGifts = data?.gifts ?? [];
-  // забронированные дарят отдельно — в общем сборе и голосовании их нет
-  const gifts = allGifts.filter((g) => !g.reserved);
-  const reservedGifts = allGifts.filter((g) => g.reserved);
+  // забронированные дарят отдельно, подаренные уже не нужны — в общем сборе их нет
+  const gifts = allGifts.filter((g) => !g.reserved && !g.received);
+  const reservedGifts = allGifts.filter((g) => g.reserved && !g.received);
+  const receivedGifts = allGifts.filter((g) => g.received);
   const isSupporter = saved > 0;
+  const closed = data?.purchase?.status === 'bought';
   const views = gifts.map((g) => giftView(g, changed ? draft : null));
   const fundedCount = views.filter((v) => v.funded).length;
+  const allFunded = gifts.length > 0 && fundedCount === gifts.length;
+  // ближайший подарок, на который пока не хватает, и сколько нужно вложить мне
+  const nextIndex = views.findIndex((v) => !v.funded);
+  const nextGift = nextIndex >= 0 ? gifts[nextIndex] : null;
+  const nextMissing = nextIndex >= 0 ? views[nextIndex].missing : 0;
 
   const onDraft = (value: number) => {
     setDraft(value);
@@ -190,6 +198,30 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
       if (!handleError(err)) toast(errorMessage(err), 'error');
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const purchase = async (action: 'take' | 'release' | 'bought' | 'reopen') => {
+    if (purchaseBusy) return;
+    if (action === 'bought' && !(await confirmAction('Отметить, что подарок куплен? Сбор закроется — взносы и голоса больше не поменять.'))) return;
+    setPurchaseBusy(true);
+    const s = ++seq.current;
+    try {
+      apply(s, await api.poolPurchase(roomId, friendId, action));
+      onChanged();
+      hapticNotification('success');
+      const messages = {
+        take: 'Покупка за вами — остальные участники видят, кому переводить',
+        release: 'Вы больше не покупаете — покупку может взять кто-то другой',
+        bought: '🎉 Подарок куплен — сбор закрыт',
+        reopen: 'Сбор снова открыт',
+      } as const;
+      toast(messages[action], 'success');
+      if (action === 'bought') setBurst((b) => b + 1);
+    } catch (err) {
+      if (!handleError(err)) toast(errorMessage(err), 'error');
+    } finally {
+      setPurchaseBusy(false);
     }
   };
 
@@ -269,7 +301,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
   };
 
   let mainButton = null;
-  if (data && changed) {
+  if (data && changed && !closed) {
     if (draft > 0) {
       mainButton = {
         text: saved ? `Изменить вклад на ${formatMoney(draft)}` : `Скинуться ${formatMoney(draft)}`,
@@ -322,24 +354,51 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
           )
         ) : (
           <>
-            {/* На что хватает — без сумм */}
+            {/* На что хватает */}
             {allGifts.length > 0 && (
               <div className="rounded-[18px] bg-card p-4" data-summary>
-                {gifts.length > 0 ? (
+                {closed ? (
+                  <div className="text-[19px] leading-snug font-bold text-success" data-closed>
+                    🎉 Подарок куплен — сбор закрыт
+                  </div>
+                ) : gifts.length > 0 ? (
                   <>
-                    <div className="text-[13px] font-medium text-hint">
-                      {changed ? 'С вашим вкладом хватит' : 'Уже хватает'}
-                    </div>
-                    <div className="mt-0.5 text-[26px] leading-tight font-bold">
-                      на <span className="tabular">{fundedCount}</span> из {gifts.length}{' '}
-                      {plural(gifts.length, ['подарка', 'подарков', 'подарков'])}
-                    </div>
+                    {allFunded ? (
+                      <div data-all-funded>
+                        <div className="text-[22px] leading-tight font-bold text-success">
+                          ✓ Хватает на все подарки
+                        </div>
+                        <div className="mt-1 text-[14px] text-hint">
+                          {isSupporter || changed
+                            ? 'Осталось выбрать и купить'
+                            : 'Сбор уже полный — можно не скидываться'}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="text-[13px] font-medium text-hint">
+                          {changed ? 'С вашим вкладом хватит' : 'Уже хватает'}
+                        </div>
+                        <div className="mt-0.5 text-[26px] leading-tight font-bold">
+                          на <span className="tabular">{fundedCount}</span> из {gifts.length}{' '}
+                          {plural(gifts.length, ['подарка', 'подарков', 'подарков'])}
+                        </div>
+                        {nextGift && (
+                          <div className="mt-1 text-[14px] text-hint" data-next-missing>
+                            До «{nextGift.title}» не хватает{' '}
+                            <b className="tabular text-text">{formatMoney(nextMissing)}</b>
+                          </div>
+                        )}
+                      </>
+                    )}
                     <div className="mt-3">
                       <ProgressPills progress={views.map((v) => v.pct)} />
                     </div>
                   </>
                 ) : (
-                  <div className="text-[19px] leading-snug font-bold">Все подарки уже кто-то дарит сам 🎁</div>
+                  <div className="text-[19px] leading-snug font-bold">
+                    {receivedGifts.length && !reservedGifts.length ? 'Все подарки уже подарили 🎉' : 'Все подарки уже кто-то дарит сам 🎁'}
+                  </div>
                 )}
                 {reservedGifts.length > 0 && gifts.length > 0 && (
                   <div className="mt-2 text-[13px] text-hint">
@@ -349,12 +408,22 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 )}
                 <div className="mt-3 flex items-start gap-2 text-[13px] leading-snug text-hint">
                   <Lock size={14} className="mt-[1px] shrink-0" />
-                  <span>Суммы скрыты от всех — видно только, на что хватает</span>
+                  <span>Сколько вложил каждый, не видит никто — ни {friend?.first_name ?? 'владелец'}, ни участники</span>
                 </div>
               </div>
             )}
 
             {/* Мой вклад */}
+            {closed ? (
+              isSupporter && (
+                <div className="flex items-center justify-between rounded-[18px] bg-card px-4 py-3.5">
+                  <span className="flex items-center gap-1.5 text-[15px] font-semibold text-success">
+                    <Check size={16} strokeWidth={3} /> Вы участвовали в сборе
+                  </span>
+                  <span className="tabular text-[15px] text-hint">{formatMoney(saved)}</span>
+                </div>
+              )
+            ) : (
             <div className="rounded-[18px] bg-card p-4">
               <label htmlFor="pledge" className="text-[16px] font-semibold">
                 Сколько готовы потратить?
@@ -372,6 +441,21 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 />
                 <span className="text-[24px] font-bold text-hint">{currencySymbol()}</span>
               </div>
+              {nextGift && gifts[nextIndex].others_missing > 0 && draft !== gifts[nextIndex].others_missing && (
+                <button
+                  onClick={() => {
+                    hapticSelection();
+                    onDraft(gifts[nextIndex].others_missing);
+                  }}
+                  data-top-up
+                  className="mt-3 flex w-full items-center justify-between gap-2 rounded-[12px] bg-accent/10 px-3 py-2.5 text-left text-[14px] text-accent"
+                >
+                  <span className="min-w-0 truncate">
+                    Чтобы хватило на {nextGift.emoji} {nextGift.title}
+                  </span>
+                  <b className="tabular shrink-0">{formatMoney(gifts[nextIndex].others_missing)}</b>
+                </button>
+              )}
               <div className="mt-3 grid grid-cols-4 gap-2">
                 {quickAmounts().map((v) => (
                   <button
@@ -403,6 +487,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 </div>
               ) : null}
             </div>
+            )}
 
             {data.supporters && (
               <PoolTeam
@@ -412,6 +497,15 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 creating={creatingChat}
                 onSaveChat={savePoolChat}
                 onCreateChat={() => void createChat()}
+              />
+            )}
+
+            {isSupporter && (data.purchase || picked.length > 0) && (
+              <PurchaseCard
+                purchase={data.purchase}
+                pickedText={pickedText}
+                busy={purchaseBusy}
+                onAction={(action) => void purchase(action)}
               />
             )}
 
@@ -432,15 +526,20 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                   🎉 <b>Все участники сбора проголосовали</b> —{' '}
                   {picked.length ? <>покупаем {pickedText}</> : 'но на выбранные подарки пока не хватает'}
                 </motion.div>
-              ) : picked.length > 0 ? (
+              ) : picked.length > 0 && !closed ? (
                 <div className="mb-3 rounded-[16px] bg-gold/12 px-4 py-3 text-[14px] leading-snug" data-picked-preview>
                   🏆 По голосам сейчас: <b>{pickedText}</b>
                   {picked.length > 1 ? ' — общего бюджета хватает на всё это' : ''}
                 </div>
               ) : null}
-              {!isSupporter && gifts.length > 0 && (
-                <div className="mb-3 rounded-[16px] bg-accent/10 px-4 py-3 text-[14px] leading-snug text-accent">
-                  Укажите сумму — и сможете голосовать, увидите других участников сбора и их чат
+              {!isSupporter && !closed && gifts.length > 0 && (
+                <div className="mb-3 rounded-[16px] bg-accent/10 px-4 py-3" data-how-to>
+                  <div className="text-[14px] font-semibold text-accent">Как скинуться вместе</div>
+                  <ol className="mt-1.5 space-y-1 text-[13px] leading-snug">
+                    <li>1. Впишите выше, сколько готовы потратить</li>
+                    <li>2. Голосуйте за подарки — можно за несколько</li>
+                    <li>3. Договоритесь в чате сбора, кто покупает</li>
+                  </ol>
                 </div>
               )}
 
@@ -452,7 +551,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                       gift={g}
                       view={views[i]}
                       fundedByDraft={changed && views[i].funded && !g.funded}
-                      canVote={isSupporter}
+                      canVote={isSupporter && !closed}
                       busy={busyId === g.id}
                       disabled={busyId !== null}
                       onVote={() => void vote(g)}
@@ -469,6 +568,23 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 )}
               </div>
             </section>
+
+            {receivedGifts.length > 0 && (
+              <section data-received-section>
+                <div className="mb-2 px-1 text-[13px] font-semibold tracking-wide text-section uppercase">
+                  🎉 Уже подарили
+                </div>
+                <div className="overflow-hidden rounded-[16px] bg-card opacity-70">
+                  {receivedGifts.map((g, i) => (
+                    <div key={g.id} className={`flex items-center gap-3 px-4 py-2.5 ${i ? 'border-t border-separator' : ''}`}>
+                      <GiftThumb gift={g} size={36} radius={10} />
+                      <span className="min-w-0 flex-1 truncate text-[15px]">{g.title}</span>
+                      <span className="tabular text-[14px] text-hint">{formatMoney(g.price)}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {reservedGifts.length > 0 && (
               <section data-reserved-section>
@@ -547,10 +663,16 @@ function GiftCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="text-[16px] leading-snug font-semibold">{gift.title}</div>
-            {gift.picked && (
+            {gift.picked ? (
               <span className="shrink-0 rounded-full bg-gold px-2 py-0.5 text-[12px] font-bold text-[#3b2600]" data-picked>
                 ✓ В покупке
               </span>
+            ) : (
+              gift.must_have && (
+                <span className="shrink-0 rounded-full bg-gold/25 px-2 py-0.5 text-[12px] font-semibold" data-must-have>
+                  ⭐ Очень хочет
+                </span>
+              )
             )}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[14px]">
@@ -569,6 +691,12 @@ function GiftCard({
               </button>
             )}
           </div>
+          {gift.note && (
+            <div className="mt-1.5 flex gap-1.5 text-[13px] leading-snug text-hint" data-note>
+              <MessageCircle size={13} className="mt-[3px] shrink-0" />
+              <span className="min-w-0">{gift.note}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -582,7 +710,9 @@ function GiftCard({
             {fundedByDraft ? 'Хватит с вашим вкладом' : 'Хватает'}
           </span>
         ) : (
-          <span className="text-hint">Пока не хватает</span>
+          <span className="text-hint">
+            Не хватает <b className="tabular text-text">{formatMoney(view.missing)}</b>
+          </span>
         )}
         <span className="tabular font-semibold text-hint">{view.pct}%</span>
       </div>
@@ -628,15 +758,129 @@ function GiftCard({
         </div>
       )}
 
-      <button
-        onClick={onReserve}
-        disabled={disabled}
-        data-reserve
-        className="mt-3 flex h-10 w-full items-center justify-center gap-1.5 rounded-[12px] bg-fill text-[14px] font-semibold transition active:scale-[0.98]"
-      >
-        🎁 Подарю сам, целиком
-      </button>
+      <div className="mt-2 -mb-1 flex justify-end">
+        <button
+          onClick={onReserve}
+          disabled={disabled}
+          data-reserve
+          className="rounded-full px-2 py-1 text-[13px] font-semibold text-link transition active:opacity-60"
+        >
+          🎁 Подарю сам, целиком
+        </button>
+      </div>
     </motion.div>
+  );
+}
+
+/**
+ * Кто покупает подарок от всего сбора. Покупатель отмечает «Куплено» —
+ * сбор закрывается; остальные видят, кому переводить свою часть.
+ */
+function PurchaseCard({
+  purchase,
+  pickedText,
+  busy,
+  onAction,
+}: {
+  purchase: FriendPayload['purchase'];
+  pickedText: string;
+  busy: boolean;
+  onAction: (action: 'take' | 'release' | 'bought' | 'reopen') => void;
+}) {
+  const gifts = purchase ? purchase.gifts.map((g) => `${g.emoji} ${g.title}`).join(' + ') : pickedText;
+  const buyer = purchase?.buyer;
+  const spinner = busy ? <Loader2 size={16} className="animate-spin" /> : null;
+
+  if (purchase?.status === 'bought') {
+    return (
+      <div className="rounded-[18px] bg-success/12 p-4" data-purchase="bought">
+        <div className="text-[16px] font-semibold text-success">🎉 Подарок куплен</div>
+        <p className="mt-0.5 text-[14px] leading-snug">
+          {gifts}
+          {buyer && !purchase.is_me && <span className="text-hint"> · купил(а) {buyer.first_name}</span>}
+        </p>
+        {purchase.is_me && (
+          <button
+            onClick={() => onAction('reopen')}
+            disabled={busy}
+            className="mt-2 text-[13px] font-medium text-link"
+          >
+            Ошибка? Вернуть сбор
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (purchase?.status === 'buying') {
+    return (
+      <div className="rounded-[18px] bg-card p-4" data-purchase="buying">
+        <div className="flex items-center gap-3">
+          {buyer && <Avatar user={buyer} size={40} />}
+          <div className="min-w-0 flex-1">
+            <div className="text-[16px] font-semibold">
+              {purchase.is_me ? 'Покупаете вы' : `Покупает ${buyer?.first_name ?? 'участник сбора'}`}
+            </div>
+            <div className="truncate text-[13px] text-hint">{gifts}</div>
+          </div>
+        </div>
+        {purchase.is_me ? (
+          <>
+            <p className="mt-2 text-[13px] leading-snug text-hint">
+              Соберите переводы от участников в чате сбора и отметьте, когда подарок куплен
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => onAction('bought')}
+                disabled={busy}
+                data-purchase-bought
+                className="flex h-11 flex-1 items-center justify-center gap-2 rounded-[12px] bg-success text-[15px] font-semibold text-white"
+              >
+                {spinner ?? '✅ Куплено'}
+              </button>
+              <button
+                onClick={() => onAction('release')}
+                disabled={busy}
+                className="h-11 rounded-[12px] bg-fill px-4 text-[15px] font-semibold text-destructive"
+              >
+                Отказаться
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="mt-2 text-[14px] leading-snug">
+              Переведите свою часть {buyer?.first_name ?? 'покупателю'} — договоритесь в чате сбора
+            </p>
+            {buyer?.username && (
+              <button
+                onClick={() => openTelegramLink(`https://t.me/${buyer.username}`)}
+                className="mt-2 text-[14px] font-medium text-link"
+              >
+                Написать {buyer.first_name}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-[18px] bg-card p-4" data-purchase="none">
+      <div className="text-[16px] font-semibold">Кто покупает?</div>
+      <p className="mt-0.5 text-[13px] leading-snug text-hint">
+        Возьмите покупку на себя — остальные увидят, кому переводить. Сейчас по голосам: {pickedText}
+      </p>
+      <button
+        onClick={() => onAction('take')}
+        disabled={busy}
+        data-purchase-take
+        className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-[12px] bg-accent text-[15px] font-semibold text-accent-text"
+      >
+        {spinner ?? '🛍 Я покупаю'}
+      </button>
+    </div>
   );
 }
 

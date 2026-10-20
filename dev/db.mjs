@@ -119,7 +119,7 @@ export async function seedDemo(db) {
   };
   const join = (user, room) => callRpc(db, 'wl_join_room', { p_init_data: as(user), p_invite_code: room.invite_code });
 
-  const addGift = async (room, owner, emoji, title, price, link = null, image = null) => {
+  const addGift = async (room, owner, emoji, title, price, link = null, image = null, extra = {}) => {
     const g = await callRpc(db, 'wl_save_gift', {
       p_init_data: as(owner),
       p_room_id: room.id,
@@ -128,6 +128,8 @@ export async function seedDemo(db) {
       p_price: price,
       p_emoji: emoji,
       p_link: link,
+      p_note: extra.note ?? null,
+      p_must_have: extra.mustHave ?? false,
     });
     gifts[title] = g.id;
     if (image) {
@@ -145,8 +147,11 @@ export async function seedDemo(db) {
   for (const id of [1002, 1003, 1004]) await join(id, friends);
 
   await addGift(friends, 1001, '📚', 'Книга «Мастер и Маргарита», подарочное издание', 350000, null, 'book');
-  await addGift(friends, 1001, '🧣', 'Тёплый плед с оленями', 890000, null, 'plaid');
-  await addGift(friends, 1001, '☕️', 'Капсульная кофемашина', 3490000, 'https://shopee.vn/may-pha-ca-phe-vien-nen', 'coffee');
+  await addGift(friends, 1001, '🧣', 'Тёплый плед с оленями', 890000, null, 'plaid', { note: 'Серый или бежевый, 150×200' });
+  await addGift(friends, 1001, '☕️', 'Капсульная кофемашина', 3490000, 'https://shopee.vn/may-pha-ca-phe-vien-nen', 'coffee', {
+    note: 'Под капсулы Nespresso, чёрная',
+    mustHave: true,
+  });
   await addGift(friends, 1001, '🎧', 'Наушники AirPods Max', 13990000, 'https://www.apple.com/vn/airpods-max/', 'airpods');
 
   await addGift(friends, 1002, '🎮', 'Геймпад DualSense', 1790000, null, 'gamepad');

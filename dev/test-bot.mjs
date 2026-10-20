@@ -171,3 +171,58 @@ describe('«Создать чат сбора»', () => {
     assert.ok(RpcError);
   });
 });
+
+describe('автозаполнение подарка по ссылке', () => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const shop = {
+    'https://shop.example.vn/p/sony': `<!doctype html><html><head><title>Sony — магазин</title>
+      <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"BreadcrumbList"},
+        {"@type":"Product","name":"Наушники Sony WH-1000XM5","image":["https://cdn.example.vn/sony.png"],
+         "offers":{"@type":"Offer","price":"7990000","priceCurrency":"VND"}}]}</script></head></html>`,
+    'https://shop.example.ru/item': `<meta property="og:title" content="Плед &quot;Олени&quot;"><meta content="2 490,00" itemprop="price">`,
+  };
+  const fetchUrl = async (url) => {
+    if (url === 'https://cdn.example.vn/sony.png') return new Response(PNG, { headers: { 'Content-Type': 'image/png' } });
+    if (shop[url]) return new Response(shop[url], { headers: { 'Content-Type': 'text/html' } });
+    return new Response('nope', { status: 404 });
+  };
+  const preview = (initData, url) => {
+    const bot = createBot({ query, telegram: createFakeTelegram().telegram, fetchUrl });
+    return handleRequest(
+      new Request('http://localhost/functions/v1/telegram-bot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'preview_link', init_data: initData, url }),
+      }),
+      { bot, secret: SECRET },
+    );
+  };
+
+  test('JSON-LD: название, цена, валюта и фото', async () => {
+    const res = await preview(as(1004), 'shop.example.vn/p/sony');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.title, 'Наушники Sony WH-1000XM5');
+    assert.equal(body.price, 7990000);
+    assert.equal(body.currency, 'VND');
+    assert.equal(body.image, `data:image/png;base64,${PNG.toString('base64')}`);
+  });
+
+  test('Open Graph и itemprop, без фото', async () => {
+    const body = await (await preview(as(1004), 'https://shop.example.ru/item')).json();
+    assert.equal(body.title, 'Плед "Олени"');
+    assert.equal(body.price, 2490);
+    assert.equal(body.image, null);
+  });
+
+  test('без подписи Telegram, на внутренние адреса и на недоступный магазин — отказ', async () => {
+    let res = await preview('', 'https://shop.example.ru/item');
+    assert.equal(res.status, 400);
+    for (const url of ['http://localhost:54321/rest/v1', '192.168.0.1/admin', 'http://10.0.0.5', 'ftp://shop.example.ru']) {
+      res = await preview(as(1004), url);
+      assert.equal(res.status, 400, url);
+    }
+    res = await preview(as(1004), 'https://shop.example.ru/missing');
+    assert.match((await res.json()).error, /не отдал страницу/);
+  });
+});

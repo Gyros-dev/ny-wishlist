@@ -28,6 +28,12 @@ export interface Gift {
   price: number;
   emoji: string;
   link: string | null;
+  /** размер, цвет, модель */
+  note: string | null;
+  /** «очень хочу» */
+  must_have: boolean;
+  /** владелец отметил «мне это подарили» */
+  received: boolean;
   /** версия фото; null — фото нет */
   image_rev: number | null;
   created_at: string;
@@ -45,6 +51,9 @@ export interface Member extends User {
   /** сколько подарков кто-то дарит сам — без имён */
   reserved_count: number;
   my_reserved_count: number;
+  /** до ближайшего подарка из сбора не хватает; null — хватает на всё */
+  next_missing: number | null;
+  purchase_status: 'buying' | 'bought' | null;
   my_pledge: number | null;
   /** итоговый набор по голосам — что покупаем */
   picked: { id: string; emoji: string; title: string }[];
@@ -59,6 +68,16 @@ export interface Bootstrap {
   /** скидывается ли мне хоть кто-то — без сумм и числа людей */
   has_supporters: boolean;
   members: Member[];
+  santa: SantaState | null;
+}
+
+export interface SantaState {
+  status: 'open' | 'drawn';
+  budget: number | null;
+  participants: User[];
+  joined: boolean;
+  /** кому дарю я — видно только мне */
+  receiver: User | null;
 }
 
 export interface FriendGift extends Gift {
@@ -67,6 +86,9 @@ export interface FriendGift extends Gift {
   /** собрано без моего взноса, % — для предпросмотра суммы */
   others_pct: number;
   funded: boolean;
+  /** сколько ещё не хватает с моим взносом и без него */
+  missing: number;
+  others_missing: number;
   /** доля участников сбора, проголосовавших за подарок, % */
   vote_pct: number | null;
   my_vote: boolean;
@@ -90,6 +112,13 @@ export interface FriendPayload {
   supporters: Supporter[] | null;
   /** Telegram-группа участников сбора — только для них */
   pool_chat: { link: string; managed: boolean; set_by: User | null } | null;
+  /** кто покупает; имя покупателя — только участникам сбора */
+  purchase: {
+    status: 'buying' | 'bought';
+    buyer: User | null;
+    is_me: boolean;
+    gifts: { id: string; emoji: string; title: string }[];
+  } | null;
   /** по возрастанию цены */
   gifts: FriendGift[];
 }
@@ -100,4 +129,13 @@ export interface GiftDraft {
   price: number;
   emoji: string;
   link: string;
+  note: string;
+  must_have: boolean;
+}
+
+export interface LinkPreview {
+  title: string | null;
+  price: number | null;
+  currency: string | null;
+  image: string | null;
 }

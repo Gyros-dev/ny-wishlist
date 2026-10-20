@@ -163,6 +163,24 @@ function WishlistApp() {
     }
   };
 
+  const onSanta = async (action: 'open' | 'join' | 'leave' | 'draw' | 'cancel', budget?: number | null) => {
+    if (!room) return;
+    try {
+      const santa = await api.santa(room.id, action, budget ?? null);
+      setBoot((b) => b && { ...b, santa });
+      const messages = {
+        open: 'Набор открыт — бот позвал всех участников',
+        join: 'Вы участвуете в Тайном Санте',
+        leave: 'Вы больше не участвуете',
+        draw: 'Жеребьёвка прошла — каждому пришла его пара',
+        cancel: 'Тайный Санта отменён',
+      } as const;
+      toast(messages[action], 'success');
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    }
+  };
+
   const onGiftSaved = (gift: Gift) => {
     const isNew = !editor.gift;
     closeEditor();
@@ -222,6 +240,7 @@ function WishlistApp() {
               onOpenFriend={(m) => setFriend({ id: m.id, preview: m })}
               onOpenRooms={() => setRoomsOpen(true)}
               onInvite={shareInvite}
+              onSanta={onSanta}
             />
           </motion.div>
 

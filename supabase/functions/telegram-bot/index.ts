@@ -7,9 +7,11 @@
 //    - /start c<id> в группе — то же для клиентов старше Bot API 9.6, где
 //      мини-приложение открывает ссылку t.me/<бот>?startgroup=c<id>;
 //    - chat_join_request: одобряет заявки участников сбора, остальные отклоняет.
-// 2. Запросы мини-приложения { action: 'prepare_chat', init_data, ... } —
-//    готовит кнопку для WebApp.requestChat (savePreparedKeyboardButton).
-//    Подпись initData проверяет база (app.auth).
+// 2. Запросы мини-приложения (подпись initData проверяет база, app.auth):
+//    - { action: 'prepare_chat' } — кнопка для WebApp.requestChat
+//      (savePreparedKeyboardButton);
+//    - { action: 'preview_link', url } — название, цена и фото товара по ссылке
+//      (Open Graph, schema.org Product), чтобы не заполнять подарок вручную.
 //
 // Токен бота и секрет вебхука лежат в app.settings. В Supabase у функции
 // должна быть выключена проверка JWT — Telegram её не присылает.
@@ -21,6 +23,15 @@ type Row = Record<string, unknown>;
 export type Query = (text: string, params?: unknown[]) => Promise<Row[]>;
 export type TelegramResult = { ok: boolean; result?: any; description?: string };
 export type Telegram = (method: string, body: Record<string, unknown>) => Promise<TelegramResult>;
+export type FetchUrl = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => Promise<Response>;
+
+export interface LinkPreview {
+  title: string | null;
+  price: number | null;
+  currency: string | null;
+  /** фото товара как data URL — браузер не может скачать его сам из-за CORS */
+  image: string | null;
+}
 
 interface Pool {
   room_id: string;
@@ -59,13 +70,213 @@ function json(body: unknown, status = 200) {
   });
 }
 
+// --- превью ссылки --------------------------------------------------------------
+
+const MAX_PAGE_BYTES = 2_000_000;
+const MAX_IMAGE_BYTES = 4_000_000;
+// Так представляется Telegram, когда строит превью ссылок: многие магазины
+// отдают ему метатеги даже там, где обычных ботов не пускают
+const PREVIEW_UA = 'TelegramBot (like TwitterBot)';
+
+function decodeEntities(text: string) {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&');
+}
+
+function cleanText(text: string | undefined | null, max: number) {
+  if (!text) return null;
+  const clean = decodeEntities(text).replace(/\s+/g, ' ').trim();
+  return clean ? clean.slice(0, max) : null;
+}
+
+function parsePrice(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).replace(/[\s\u00a0\u202f]/g, '');
+  // «1.234.567,00», «1,234,567.00», «1234567» → целое число
+  const m = /^(\d{1,3}(?:[.,]\d{3})+|\d+)(?:[.,](\d{1,2}))?$/.exec(raw.replace(/[^\d.,]/g, ''));
+  if (!m) return null;
+  const whole = Number(m[1].replace(/[.,]/g, ''));
+  const value2 = whole + (m[2] ? Number(`0.${m[2]}`) : 0);
+  return Number.isFinite(value2) && value2 > 0 ? Math.round(value2) : null;
+}
+
+/** Метатеги и schema.org Product со страницы товара. */
+export function parseProductPage(html: string, pageUrl: string) {
+  const meta = new Map<string, string>();
+  for (const tag of html.match(/<meta\s[^>]*>/gi) ?? []) {
+    const attrs: Record<string, string> = {};
+    for (const a of tag.matchAll(/([a-zA-Z_:-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g)) {
+      attrs[a[1].toLowerCase()] = a[3] ?? a[4] ?? a[5] ?? '';
+    }
+    const key = (attrs.property || attrs.name || attrs.itemprop || '').toLowerCase();
+    if (key && attrs.content !== undefined && !meta.has(key)) meta.set(key, attrs.content);
+  }
+
+  // JSON-LD: ищем Product и его offers
+  let ld: { title?: string; image?: string; price?: unknown; currency?: string } = {};
+  for (const block of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const stack: unknown[] = [JSON.parse(block[1].trim())];
+      while (stack.length) {
+        const node = stack.pop();
+        if (Array.isArray(node)) {
+          stack.push(...node);
+        } else if (node && typeof node === 'object') {
+          const o = node as Record<string, any>;
+          const types = ([] as unknown[]).concat(o['@type'] ?? []).map(String);
+          if (types.includes('Product')) {
+            const offers = ([] as any[]).concat(o.offers ?? [])[0] ?? {};
+            const image = ([] as any[]).concat(o.image ?? [])[0];
+            ld = {
+              title: o.name,
+              image: typeof image === 'string' ? image : image?.url,
+              price: offers.price ?? offers.lowPrice ?? offers.priceSpecification?.price,
+              currency: offers.priceCurrency ?? offers.priceSpecification?.priceCurrency,
+            };
+            stack.length = 0;
+            break;
+          }
+          if (o['@graph']) stack.push(o['@graph']);
+        }
+      }
+    } catch {
+      // битый JSON-LD — пропускаем
+    }
+    if (ld.title) break;
+  }
+
+  const titleTag = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1];
+  const title = cleanText(ld.title ?? meta.get('og:title') ?? meta.get('twitter:title') ?? titleTag, 120);
+  const imageRaw = ld.image ?? meta.get('og:image:secure_url') ?? meta.get('og:image') ?? meta.get('twitter:image');
+  let image: string | null = null;
+  if (imageRaw) {
+    try {
+      image = new URL(decodeEntities(imageRaw), pageUrl).toString();
+    } catch {
+      image = null;
+    }
+  }
+  const price = parsePrice(
+    ld.price ?? meta.get('product:price:amount') ?? meta.get('og:price:amount') ?? meta.get('price'),
+  );
+  const currency =
+    (ld.currency ?? meta.get('product:price:currency') ?? meta.get('og:price:currency') ?? meta.get('pricecurrency') ?? '')
+      .toUpperCase()
+      .trim() || null;
+  return { title, image, price, currency };
+}
+
+/** Только публичные http(s)-адреса: не даём ходить боту во внутренние сети. */
+export function publicUrl(raw: unknown): URL | null {
+  let url: URL;
+  try {
+    const text = String(raw ?? '').trim();
+    url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  const host = url.hostname.toLowerCase();
+  if (
+    !host.includes('.') ||
+    host === 'localhost' ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    /^\[/.test(host) ||
+    /^(0|10|127|169\.254|192\.168|172\.(1[6-9]|2\d|3[01]))\./.test(host) ||
+    /^\d+\.\d+\.\d+\.\d+$/.test(host) && /^(100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7]))\./.test(host)
+  ) {
+    return null;
+  }
+  return url;
+}
+
+async function readLimited(res: Response, limit: number): Promise<Uint8Array | null> {
+  const reader = res.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > limit) {
+      await reader.cancel();
+      break;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(Math.min(size, limit));
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c.subarray(0, out.length - offset), offset);
+    offset += c.length;
+    if (offset >= out.length) break;
+  }
+  return out;
+}
+
+function toBase64(bytes: Uint8Array) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
 function errorText(err: unknown) {
   const message = (err as { message?: string })?.message ?? String(err);
   return message.replace(/^error:\s*/i, '');
 }
 
-export function createBot({ query, telegram }: { query: Query; telegram: Telegram }) {
+export function createBot({
+  query,
+  telegram,
+  fetchUrl = (url, init) => fetch(url, { ...init, redirect: 'follow' }),
+}: {
+  query: Query;
+  telegram: Telegram;
+  fetchUrl?: FetchUrl;
+}) {
   const one = async (text: string, params: unknown[]) => (await query(text, params))[0] ?? null;
+
+  async function previewLink(body: { init_data?: string; url?: string }): Promise<LinkPreview> {
+    // только для пользователей мини-приложения: бот не должен быть открытым прокси
+    await one('select app.auth($1::text) as id', [body.init_data ?? '']);
+    const url = publicUrl(body.url);
+    if (!url) throw new Error('Это не похоже на ссылку на товар');
+
+    const headers = { 'User-Agent': PREVIEW_UA, 'Accept-Language': 'ru,en;q=0.8', Accept: 'text/html,*/*;q=0.5' };
+    const page = await fetchUrl(url.toString(), { headers, signal: AbortSignal.timeout(8000) });
+    if (!page.ok) throw new Error(`Магазин не отдал страницу (${page.status}) — заполните вручную`);
+    const bytes = await readLimited(page, MAX_PAGE_BYTES);
+    const html = bytes ? new TextDecoder().decode(bytes) : '';
+    const found = parseProductPage(html, page.url || url.toString());
+
+    let image: string | null = null;
+    const imageUrl = found.image ? publicUrl(found.image) : null;
+    if (imageUrl) {
+      try {
+        const res = await fetchUrl(imageUrl.toString(), {
+          headers: { 'User-Agent': PREVIEW_UA, Accept: 'image/*' },
+          signal: AbortSignal.timeout(8000),
+        });
+        const type = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+        if (res.ok && /^image\/(jpeg|png|webp|gif|avif)$/.test(type)) {
+          const data = await readLimited(res, MAX_IMAGE_BYTES);
+          if (data && data.length < MAX_IMAGE_BYTES) image = `data:${type};base64,${toBase64(data)}`;
+        }
+      } catch {
+        // без фото — тоже хорошо
+      }
+    }
+    return { title: found.title, price: found.price, currency: found.currency, image };
+  }
 
   async function prepareChat(body: { init_data?: string; room_id?: string; friend_id?: number }) {
     const row = await one('select app.bot_prepare_chat($1::text, $2::uuid, $3::bigint) as r', [
@@ -220,7 +431,7 @@ export function createBot({ query, telegram }: { query: Query; telegram: Telegra
     }
   }
 
-  return { prepareChat, handleUpdate };
+  return { prepareChat, previewLink, handleUpdate };
 }
 
 export async function handleRequest(req: Request, deps: { bot: ReturnType<typeof createBot>; secret?: string }) {
@@ -231,9 +442,9 @@ export async function handleRequest(req: Request, deps: { bot: ReturnType<typeof
   if (!body || typeof body !== 'object') return json({ error: 'Пустой запрос' }, 400);
 
   // Мини-приложение: подпись initData проверяет база
-  if (body.action === 'prepare_chat') {
+  if (body.action === 'prepare_chat' || body.action === 'preview_link') {
     try {
-      return json(await deps.bot.prepareChat(body));
+      return json(body.action === 'prepare_chat' ? await deps.bot.prepareChat(body) : await deps.bot.previewLink(body));
     } catch (err) {
       return json({ error: errorText(err) }, 400);
     }
