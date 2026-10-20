@@ -104,8 +104,13 @@ export const api = {
   reserveGift: (roomId: string, giftId: string, reserve: boolean) =>
     rpc<FriendPayload>('wl_reserve_gift', { p_room_id: roomId, p_gift_id: giftId, p_reserve: reserve }),
 
-  vote: (roomId: string, friendId: number, giftId: string | null) =>
-    rpc<FriendPayload>('wl_vote', { p_room_id: roomId, p_friend_id: friendId, p_gift_id: giftId }),
+  /** голосовать можно за несколько подарков; on: false — снять голос */
+  vote: (roomId: string, friendId: number, giftId: string, on: boolean) =>
+    rpc<FriendPayload>('wl_vote', { p_room_id: roomId, p_friend_id: friendId, p_gift_id: giftId, p_on: on }),
+
+  /** ссылка на Telegram-группу участников сбора; пустая строка убирает */
+  setPoolChat: (roomId: string, friendId: number, link: string) =>
+    rpc<FriendPayload>('wl_set_pool_chat', { p_room_id: roomId, p_friend_id: friendId, p_link: link }),
 };
 
 export function errorMessage(err: unknown): string {

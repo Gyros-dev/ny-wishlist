@@ -121,7 +121,8 @@ describe('компании', () => {
     const forbidden = { code: 'WL403' };
     await rejects(rpc('wl_friend', { p_init_data: stranger, p_room_id: friends.id, p_friend_id: 1001 }), forbidden);
     await rejects(rpc('wl_set_pledge', { p_init_data: stranger, p_room_id: friends.id, p_friend_id: 1001, p_amount: 1 }), forbidden);
-    await rejects(rpc('wl_vote', { p_init_data: stranger, p_room_id: friends.id, p_friend_id: 1001, p_gift_id: gifts['Тёплый плед с оленями'] }), forbidden);
+    await rejects(rpc('wl_vote', { p_init_data: stranger, p_room_id: friends.id, p_friend_id: 1001, p_gift_id: gifts['Тёплый плед с оленями'], p_on: true }), forbidden);
+    await rejects(rpc('wl_set_pool_chat', { p_init_data: stranger, p_room_id: friends.id, p_friend_id: 1001, p_link: 't.me/+hack' }), forbidden);
     await rejects(rpc('wl_save_gift', { p_init_data: stranger, p_room_id: friends.id, p_gift_id: null, p_title: 'X', p_price: 1, p_emoji: null, p_link: null }), forbidden);
     const images = await rpc('wl_gift_images', { p_init_data: stranger, p_gift_ids: [gifts['Капсульная кофемашина']] });
     assert.deepEqual(images, {}, 'фото чужой компании не отдаются');
@@ -177,17 +178,32 @@ describe('компании', () => {
 });
 
 describe('приватность', () => {
-  test('в вишлисте друга нет сумм, числа скинувшихся и имён голосовавших', async () => {
+  test('не участник сбора не видит ни сумм, ни участников, ни чата', async () => {
     const res = await rpc('wl_friend', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1001 });
-    assert.deepEqual(Object.keys(res).sort(), ['decided_gift_id', 'friend', 'gifts', 'my_pledge', 'my_vote']);
+    assert.deepEqual(Object.keys(res).sort(), ['decided', 'friend', 'gifts', 'my_pledge', 'pool_chat', 'supporters']);
+    assert.equal(res.supporters, null);
+    assert.equal(res.pool_chat, null);
     const json = JSON.stringify(res);
-    for (const leak of ['1000000', '700000', '1700000', 'Миша', 'Катя', 'supporters', 'voters', 'pool']) {
+    for (const leak of ['1000000', '700000', '1700000', 'Миша', 'Катя', 'AliceGift', 'voters']) {
       assert.ok(!json.includes(leak), `утечка: ${leak}`);
     }
     const plaid = res.gifts.find((g) => g.title === 'Тёплый плед с оленями');
     assert.equal(plaid.pct, 100);
-    assert.equal(plaid.vote_pct, 100);
-    assert.equal(plaid.is_leader, true);
+    assert.equal(plaid.vote_pct, 50, 'за плед — 1 из 2 участников сбора');
+    assert.equal(plaid.picked, true);
+  });
+
+  test('участники сбора видят друг друга и чат, но не суммы', async () => {
+    const res = await rpc('wl_friend', { p_init_data: as(1004), p_room_id: friends.id, p_friend_id: 1001 });
+    assert.deepEqual(res.supporters.map((s) => [s.first_name, s.username, s.is_me]), [
+      ['Миша', 'misha_k', false],
+      ['Катя', 'katya_iv', true],
+    ]);
+    assert.equal(res.pool_chat.link, 'https://t.me/+AliceGift2027demo');
+    assert.equal(res.pool_chat.set_by.first_name, 'Миша');
+    const json = JSON.stringify(res);
+    assert.ok(!json.includes('1000000') && !json.includes('1700000'), 'чужих сумм нет');
+    assert.ok(!json.includes('voters'), 'кто за что голосовал — не видно');
   });
 
   test('в списке участников — только проценты сбора', async () => {
@@ -195,7 +211,7 @@ describe('приватность', () => {
     const alice = res.members.find((m) => m.id === 1001);
     assert.deepEqual(alice.progress, [100, 100, 48, 12]);
     assert.equal(alice.funded_count, 2);
-    assert.equal(alice.leader.title, 'Тёплый плед с оленями');
+    assert.deepEqual(alice.picked.map((p) => p.title), ['Тёплый плед с оленями']);
     const json = JSON.stringify(res.members);
     assert.ok(!json.includes('1700000') && !json.includes('supporters'));
   });
@@ -267,42 +283,73 @@ describe('сбор и голосование', () => {
 
   test('голосовать можно только участнику сбора и только за подарок друга', async () => {
     await rejects(
-      rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1001, p_gift_id: gifts['Капсульная кофемашина'] }),
+      rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1001, p_gift_id: gifts['Капсульная кофемашина'], p_on: true }),
       { message: /сначала укажите/ },
     );
     await rejects(
-      rpc('wl_vote', { p_init_data: as(1005), p_room_id: friends.id, p_friend_id: 1001, p_gift_id: gifts['Лонгборд'] }),
+      rpc('wl_vote', { p_init_data: as(1005), p_room_id: friends.id, p_friend_id: 1001, p_gift_id: gifts['Лонгборд'], p_on: true }),
       { message: /не найден/ },
     );
   });
 
-  test('доли голосов, лидер и итог, когда проголосовали все', async () => {
-    const vote = (id, title) =>
-      rpc('wl_vote', { p_init_data: as(id), p_room_id: friends.id, p_friend_id: 1001, p_gift_id: title && gifts[title] });
+  test('голоса за несколько подарков и итоговый набор в пределах бюджета', async () => {
+    const vote = (id, title, on = true) =>
+      rpc('wl_vote', { p_init_data: as(id), p_room_id: friends.id, p_friend_id: 1001, p_gift_id: gifts[title], p_on: on });
+    const by = (res, title) => res.gifts.find((g) => g.title === title);
+    const picked = (res) => res.gifts.filter((g) => g.picked).map((g) => g.title);
 
+    // бюджет 3 500 000: Миша (плед), Катя и Макс — за кофемашину
     let res = await vote(1004, 'Капсульная кофемашина');
-    let coffee = res.gifts.find((g) => g.title === 'Капсульная кофемашина');
-    assert.equal(coffee.vote_pct, 50);
-    assert.equal(coffee.is_leader, false, 'ничья — лидера нет');
-    assert.equal(res.decided_gift_id, null, 'Макс ещё не голосовал');
+    assert.equal(by(res, 'Капсульная кофемашина').vote_pct, 33);
+    assert.equal(res.decided, false, 'Макс ещё не голосовал');
 
     res = await vote(1005, 'Капсульная кофемашина');
-    coffee = res.gifts.find((g) => g.title === 'Капсульная кофемашина');
-    assert.equal(coffee.vote_pct, 67);
-    assert.equal(coffee.is_leader, true);
-    assert.equal(res.my_vote, coffee.id);
-    assert.equal(res.decided_gift_id, coffee.id, 'все трое проголосовали');
+    assert.equal(by(res, 'Капсульная кофемашина').vote_pct, 67);
+    assert.equal(by(res, 'Капсульная кофемашина').my_vote, true);
+    assert.equal(res.decided, true, 'все трое проголосовали');
+    assert.deepEqual(picked(res), ['Капсульная кофемашина'], 'после кофемашины на плед уже не хватает');
 
-    res = await vote(1005, null);
-    assert.equal(res.my_vote, null);
-    assert.equal(res.decided_gift_id, null);
+    // Макс передумал: за плед и книгу — денег хватает сразу на два подарка
+    await vote(1005, 'Капсульная кофемашина', false);
+    await vote(1005, 'Тёплый плед с оленями');
+    res = await vote(1005, 'Книга «Мастер и Маргарита», подарочное издание');
+    assert.deepEqual(
+      res.gifts.filter((g) => g.my_vote).map((g) => g.title).sort(),
+      ['Книга «Мастер и Маргарита», подарочное издание', 'Тёплый плед с оленями'],
+    );
+    assert.deepEqual(picked(res), ['Книга «Мастер и Маргарита», подарочное издание', 'Тёплый плед с оленями']);
+    assert.equal(res.decided, true);
+
+    const list = await rpc('wl_bootstrap', { p_init_data: as(1003), p_room_id: friends.id });
+    assert.equal(list.members.find((m) => m.id === 1001).picked.length, 2);
+
+    // вернули как было: Макс за кофемашину
+    await vote(1005, 'Тёплый плед с оленями', false);
+    await vote(1005, 'Книга «Мастер и Маргарита», подарочное издание', false);
+    res = await vote(1005, 'Капсульная кофемашина');
+    assert.deepEqual(picked(res), ['Капсульная кофемашина']);
+  });
+
+  test('ссылка на чат сбора: только Telegram, задать и убрать может участник', async () => {
+    const set = (id, link) => rpc('wl_set_pool_chat', { p_init_data: as(id), p_room_id: friends.id, p_friend_id: 1001, p_link: link });
+    await rejects(set(1005, 'https://evil.example.com/+abc'), { message: /ссылка-приглашение/ });
+    await rejects(set(1003, 't.me/+notsupporter'), { message: /только тем, кто скидывается/ });
+    await rejects(set(1001, 't.me/+owner'), { message: /только тем, кто скидывается/ });
+    let res = await set(1005, 'telegram.me/joinchat/AbCdEf123');
+    assert.equal(res.pool_chat.link, 'https://t.me/joinchat/AbCdEf123');
+    assert.equal(res.pool_chat.set_by.first_name, 'Макс');
+    res = await set(1005, '');
+    assert.equal(res.pool_chat, null);
+    res = await set(1002, 'https://t.me/+AliceGift2027demo');
+    assert.equal(res.pool_chat.link, 'https://t.me/+AliceGift2027demo');
   });
 
   test('выход из сбора убирает и голос', async () => {
-    await rpc('wl_vote', { p_init_data: as(1005), p_room_id: friends.id, p_friend_id: 1001, p_gift_id: gifts['Наушники AirPods Max'] });
+    await rpc('wl_vote', { p_init_data: as(1005), p_room_id: friends.id, p_friend_id: 1001, p_gift_id: gifts['Наушники AirPods Max'], p_on: true });
     const res = await rpc('wl_set_pledge', { p_init_data: as(1005), p_room_id: friends.id, p_friend_id: 1001, p_amount: 0 });
     assert.equal(res.my_pledge, null);
-    assert.equal(res.my_vote, null);
+    assert.ok(res.gifts.every((g) => !g.my_vote), 'все голоса Макса пропали');
+    assert.equal(res.supporters, null, 'вышел из сбора — участников больше не видно');
     assert.equal(res.gifts.find((g) => g.title === 'Наушники AirPods Max').vote_pct, 0);
     assert.equal(res.gifts.find((g) => g.title === 'Капсульная кофемашина').funded, false);
   });
@@ -311,10 +358,10 @@ describe('сбор и голосование', () => {
     const g = await rpc('wl_save_gift', {
       p_init_data: as(1002), p_room_id: friends.id, p_gift_id: null, p_title: 'Временный', p_price: 100, p_emoji: '🎁', p_link: null,
     });
-    await rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002, p_gift_id: g.id });
+    await rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002, p_gift_id: g.id, p_on: true });
     await rpc('wl_delete_gift', { p_init_data: as(1002), p_gift_id: g.id });
-    const res = await rpc('wl_friend', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002 });
-    assert.equal(res.my_vote, null);
+    const { rows } = await db.query('select count(*)::int as n from app.votes where gift_id = $1', [g.id]);
+    assert.equal(rows[0].n, 0);
   });
 });
 
@@ -382,14 +429,14 @@ describe('бронь «подарю сам»', () => {
 
   test('бронь сбрасывает голоса за подарок и видна забронировавшему', async () => {
     // Оля скидывается Мише и голосует за носки
-    await rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002, p_gift_id: gifts['Носки с оленями'] });
+    await rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002, p_gift_id: gifts['Носки с оленями'], p_on: true });
     const res = await reserve(1004, 'Носки с оленями');
     const socks = socksOf(res);
     assert.equal(socks.reserved, true);
     assert.equal(socks.reserved_by_me, true);
     assert.equal(socks.vote_pct, null);
     const olya = await rpc('wl_friend', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002 });
-    assert.equal(olya.my_vote, null, 'голос Оли за носки сброшен');
+    assert.equal(socksOf(olya).my_vote, false, 'голос Оли за носки сброшен');
   });
 
   test('остальные видят бронь, но не знают, чья она', async () => {
@@ -422,7 +469,7 @@ describe('бронь «подарю сам»', () => {
 
   test('за забронированный подарок нельзя голосовать', async () => {
     await rejects(
-      rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002, p_gift_id: gifts['Носки с оленями'] }),
+      rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002, p_gift_id: gifts['Носки с оленями'], p_on: true }),
       { message: /уже кто-то дарит сам/ },
     );
   });

@@ -46,7 +46,8 @@ export interface Member extends User {
   reserved_count: number;
   my_reserved_count: number;
   my_pledge: number | null;
-  leader: { id: string; emoji: string; title: string } | null;
+  /** итоговый набор по голосам — что покупаем */
+  picked: { id: string; emoji: string; title: string }[];
 }
 
 export interface Bootstrap {
@@ -66,20 +67,29 @@ export interface FriendGift extends Gift {
   /** собрано без моего взноса, % — для предпросмотра суммы */
   others_pct: number;
   funded: boolean;
-  /** доля голосов, %; null — голосов нет */
+  /** доля участников сбора, проголосовавших за подарок, % */
   vote_pct: number | null;
-  is_leader: boolean;
+  my_vote: boolean;
+  /** входит в итоговый набор: по голосам и в пределах общего бюджета */
+  picked: boolean;
   /** подарок кто-то дарит сам — кто именно, не сообщается */
   reserved: boolean;
   reserved_by_me: boolean;
 }
 
+export interface Supporter extends User {
+  is_me: boolean;
+}
+
 export interface FriendPayload {
   friend: User;
   my_pledge: number | null;
-  my_vote: string | null;
-  /** все участники сбора проголосовали — этот подарок покупаем */
-  decided_gift_id: string | null;
+  /** все участники сбора проголосовали — покупаем подарки с picked */
+  decided: boolean;
+  /** кто скидывается — только для участников сбора, иначе null */
+  supporters: Supporter[] | null;
+  /** Telegram-группа участников сбора — только для них */
+  pool_chat: { link: string; set_by: User | null } | null;
   /** по возрастанию цены */
   gifts: FriendGift[];
 }

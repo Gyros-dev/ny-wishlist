@@ -138,7 +138,7 @@ export async function seedDemo(db) {
   const pledge = (room, from, to, amount) =>
     callRpc(db, 'wl_set_pledge', { p_init_data: as(from), p_room_id: room.id, p_friend_id: to, p_amount: amount });
   const vote = (room, from, to, title) =>
-    callRpc(db, 'wl_vote', { p_init_data: as(from), p_room_id: room.id, p_friend_id: to, p_gift_id: gifts[title] });
+    callRpc(db, 'wl_vote', { p_init_data: as(from), p_room_id: room.id, p_friend_id: to, p_gift_id: gifts[title], p_on: true });
 
   // --- Друзья · Новый год (VND) ---
   const friends = await createRoom(1001, 'Друзья · Новый год', 'VND', DEMO_INVITE);
@@ -163,6 +163,14 @@ export async function seedDemo(db) {
   await pledge(friends, 1002, 1001, 1000000);
   await pledge(friends, 1004, 1001, 700000);
   await vote(friends, 1002, 1001, 'Тёплый плед с оленями');
+
+  // Миша завёл группу в Telegram для участников сбора Алисе
+  await callRpc(db, 'wl_set_pool_chat', {
+    p_init_data: as(1002),
+    p_room_id: friends.id,
+    p_friend_id: 1001,
+    p_link: 't.me/+AliceGift2027demo',
+  });
 
   await pledge(friends, 1003, 1002, 500000);
   await pledge(friends, 1001, 1003, 400000);

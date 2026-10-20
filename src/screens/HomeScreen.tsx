@@ -232,7 +232,7 @@ function MemberCard({ member: m, onClick }: { member: Member; onClick: () => voi
         )}
       </div>
 
-      {(m.my_pledge || m.leader || m.my_reserved_count > 0) && (
+      {(m.my_pledge || m.picked.length > 0 || m.my_reserved_count > 0) && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {m.my_pledge ? (
             <span className="tabular rounded-full bg-accent/12 px-2.5 py-1 text-[13px] font-semibold text-accent">
@@ -244,9 +244,10 @@ function MemberCard({ member: m, onClick }: { member: Member; onClick: () => voi
               🎁 Вы дарите сами · {m.my_reserved_count}
             </span>
           )}
-          {m.leader && (
+          {m.picked.length > 0 && (
             <span className="max-w-full truncate rounded-full bg-gold/20 px-2.5 py-1 text-[13px] font-medium">
-              🏆 {m.leader.emoji} {m.leader.title}
+              🏆 {m.picked[0].emoji} {m.picked[0].title}
+              {m.picked.length > 1 ? ` + ещё ${m.picked.length - 1}` : ''}
             </span>
           )}
         </div>

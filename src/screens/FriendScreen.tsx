@@ -2,7 +2,7 @@ import { motion, useIsPresent } from 'framer-motion';
 import { Check, ExternalLink, Loader2, Lock } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage } from '../api/client';
-import type { FriendGift, FriendPayload, Member } from '../api/types';
+import type { FriendGift, FriendPayload, Member, Supporter } from '../api/types';
 import { AmountInput } from '../components/AmountInput';
 import { Avatar } from '../components/Avatar';
 import { Confetti } from '../components/Confetti';
@@ -12,7 +12,8 @@ import { ProgressBar, ProgressPills } from '../components/ProgressBar';
 import { toast } from '../components/Toast';
 import { usePolling } from '../hooks/usePolling';
 import { Layer, useBackButton, useMainButton } from '../telegram/buttons';
-import { confirmAction, haptic, hapticNotification, hapticSelection, openLink } from '../telegram/webapp';
+import { confirmAction, haptic, hapticNotification, hapticSelection, openLink, openTelegramLink } from '../telegram/webapp';
+import { copyText } from '../utils/share';
 import {
   currencySymbol,
   formatMoney,
@@ -66,6 +67,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
   const [busyId, setBusyId] = useState<string | null>(null);
   const [burst, setBurst] = useState(0);
   const [photo, setPhoto] = useState<{ src: string; caption: string } | null>(null);
+  const [chatBusy, setChatBusy] = useState(false);
 
   // Ответы опроса могут прийти позже ответа на действие пользователя —
   // применяем только то, что отправлено не раньше последнего применённого.
@@ -159,23 +161,39 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
   };
 
   const leave = async () => {
-    if (await confirmAction('Выйти из сбора? Ваш голос тоже отменится.')) void savePledge(0);
+    if (await confirmAction('Выйти из сбора? Ваши голоса тоже отменятся.')) void savePledge(0);
   };
 
   const vote = async (gift: FriendGift) => {
     if (!data || busyId) return;
-    const target = data.my_vote === gift.id ? null : gift.id;
+    const on = !gift.my_vote;
     haptic('medium');
     setBusyId(gift.id);
     const s = ++seq.current;
     try {
-      apply(s, await api.vote(roomId, friendId, target));
+      apply(s, await api.vote(roomId, friendId, gift.id, on));
       onChanged();
-      if (target) toast(`Ваш голос — за ${gift.emoji} ${gift.title}. Голоса анонимны`, 'success');
+      if (on) toast(`Голос за ${gift.emoji} ${gift.title}. Можно выбрать несколько`, 'success');
     } catch (err) {
       if (!handleError(err)) toast(errorMessage(err), 'error');
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const savePoolChat = async (link: string) => {
+    setChatBusy(true);
+    const s = ++seq.current;
+    try {
+      apply(s, await api.setPoolChat(roomId, friendId, link));
+      hapticNotification('success');
+      toast(link ? 'Ссылка на чат сохранена — её видят участники сбора' : 'Ссылка на чат убрана', 'success');
+      return true;
+    } catch (err) {
+      if (!handleError(err)) toast(errorMessage(err), 'error');
+      return false;
+    } finally {
+      setChatBusy(false);
     }
   };
 
@@ -226,8 +244,9 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
   useBackButton(Layer.friend, isPresent ? onBack : null);
 
   const friend = data?.friend ?? preview;
-  const decidedIndex = data?.decided_gift_id ? gifts.findIndex((g) => g.id === data.decided_gift_id) : -1;
-  const decided = decidedIndex >= 0 ? gifts[decidedIndex] : null;
+  // итоговый набор считает сервер: по голосам и в пределах общего бюджета
+  const picked = gifts.filter((g) => g.picked);
+  const pickedText = picked.map((g) => `${g.emoji} ${g.title}`).join(' + ');
 
   return (
     <div className="screen" data-screen="friend">
@@ -289,7 +308,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 )}
                 <div className="mt-3 flex items-start gap-2 text-[13px] leading-snug text-hint">
                   <Lock size={14} className="mt-[1px] shrink-0" />
-                  <span>Суммы и участники сбора скрыты — видно только, на что хватает</span>
+                  <span>Суммы скрыты от всех — видно только, на что хватает</span>
                 </div>
               </div>
             )}
@@ -344,6 +363,15 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
               ) : null}
             </div>
 
+            {data.supporters && (
+              <PoolTeam
+                supporters={data.supporters}
+                chat={data.pool_chat}
+                busy={chatBusy}
+                onSaveChat={savePoolChat}
+              />
+            )}
+
             {/* Подарки */}
             <section>
               <div className="mb-2 flex items-end justify-between px-1">
@@ -351,20 +379,25 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 <span className="text-[13px] text-hint">по цене</span>
               </div>
 
-              {decided && (
+              {data.decided ? (
                 <motion.div
                   initial={{ opacity: 0, y: -6 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="mb-3 rounded-[16px] bg-gold/20 px-4 py-3 text-[15px] leading-snug"
                   data-decision
                 >
-                  🎉 <b>Все участники сбора проголосовали</b> — покупаем {decided.emoji} {decided.title}
-                  {views[decidedIndex].funded ? '' : `. Пока собрано ${views[decidedIndex].pct}%`}
+                  🎉 <b>Все участники сбора проголосовали</b> —{' '}
+                  {picked.length ? <>покупаем {pickedText}</> : 'но на выбранные подарки пока не хватает'}
                 </motion.div>
-              )}
+              ) : picked.length > 0 ? (
+                <div className="mb-3 rounded-[16px] bg-gold/12 px-4 py-3 text-[14px] leading-snug" data-picked-preview>
+                  🏆 По голосам сейчас: <b>{pickedText}</b>
+                  {picked.length > 1 ? ' — общего бюджета хватает на всё это' : ''}
+                </div>
+              ) : null}
               {!isSupporter && gifts.length > 0 && (
                 <div className="mb-3 rounded-[16px] bg-accent/10 px-4 py-3 text-[14px] leading-snug text-accent">
-                  Укажите сумму — и сможете голосовать за подарок, который купите вместе
+                  Укажите сумму — и сможете голосовать, увидите других участников сбора и их чат
                 </div>
               )}
 
@@ -376,7 +409,6 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                       gift={g}
                       view={views[i]}
                       fundedByDraft={changed && views[i].funded && !g.funded}
-                      myVote={data.my_vote}
                       canVote={isSupporter}
                       busy={busyId === g.id}
                       disabled={busyId !== null}
@@ -440,7 +472,6 @@ function GiftCard({
   gift,
   view,
   fundedByDraft,
-  myVote,
   canVote,
   busy,
   disabled,
@@ -451,7 +482,6 @@ function GiftCard({
   gift: FriendGift;
   view: ReturnType<typeof giftView>;
   fundedByDraft: boolean;
-  myVote: string | null;
   canVote: boolean;
   busy: boolean;
   disabled: boolean;
@@ -459,14 +489,14 @@ function GiftCard({
   onReserve: () => void;
   onOpenPhoto: (src: string) => void;
 }) {
-  const voted = myVote === gift.id;
+  const voted = gift.my_vote;
   const votePct = gift.vote_pct ?? 0;
 
   return (
     <motion.div
       layout
       transition={layoutSpring}
-      className={`rounded-[18px] bg-card p-4 ${gift.is_leader ? 'ring-2 ring-gold' : ''}`}
+      className={`rounded-[18px] bg-card p-4 ${gift.picked ? 'ring-2 ring-gold' : ''}`}
       data-gift={gift.title}
     >
       <div className="flex gap-3">
@@ -474,9 +504,9 @@ function GiftCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="text-[16px] leading-snug font-semibold">{gift.title}</div>
-            {gift.is_leader && (
-              <span className="shrink-0 rounded-full bg-gold px-2 py-0.5 text-[12px] font-bold text-[#3b2600]">
-                🏆 Лидер
+            {gift.picked && (
+              <span className="shrink-0 rounded-full bg-gold px-2 py-0.5 text-[12px] font-bold text-[#3b2600]" data-picked>
+                ✓ В покупке
               </span>
             )}
           </div>
@@ -526,7 +556,7 @@ function GiftCard({
                     animate={{ width: `${votePct}%` }}
                   />
                 </span>
-                <span className="tabular">голосов {votePct}%</span>
+                <span className="tabular whitespace-nowrap">{votePct}% за</span>
               </div>
             ) : (
               'Пока без голосов'
@@ -545,7 +575,7 @@ function GiftCard({
                 <Loader2 size={16} className="animate-spin" />
               ) : voted ? (
                 <>
-                  <Check size={16} strokeWidth={3} /> Мой выбор
+                  <Check size={16} strokeWidth={3} /> Мой голос
                 </>
               ) : (
                 'Голосовать'
@@ -625,5 +655,154 @@ function ReservedCard({
         </div>
       )}
     </motion.div>
+  );
+}
+
+/** Кто скидывается вместе со мной и ссылка на их Telegram-группу. Видят только участники сбора. */
+function PoolTeam({
+  supporters,
+  chat,
+  busy,
+  onSaveChat,
+}: {
+  supporters: Supporter[];
+  chat: FriendPayload['pool_chat'];
+  busy: boolean;
+  onSaveChat: (link: string) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [link, setLink] = useState('');
+  const usernames = supporters.filter((s) => !s.is_me && s.username).map((s) => `@${s.username}`);
+  const showForm = !chat || editing;
+
+  const save = async (value: string) => {
+    if (await onSaveChat(value)) {
+      setEditing(false);
+      setLink('');
+    }
+  };
+
+  const copy = async () => {
+    if (await copyText(usernames.join(' '))) toast(`Скопировано: ${usernames.join(' ')}`, 'success');
+    else toast('Не получилось скопировать', 'error');
+  };
+
+  return (
+    <div className="rounded-[18px] bg-card p-4" data-pool-team>
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="text-[16px] font-semibold">Скидываются вместе</h3>
+        <span className="text-[13px] text-hint">
+          {pluralize(supporters.length, ['участник', 'участника', 'участников'])}
+        </span>
+      </div>
+      <p className="mt-0.5 text-[13px] leading-snug text-hint">
+        Список видят только участники сбора. Кто сколько вложил — не видит никто
+      </p>
+
+      <div className="mt-2.5 -mx-2">
+        {supporters.map((s) => {
+          const canWrite = !s.is_me && !!s.username;
+          return (
+            <button
+              key={s.id}
+              onClick={() => canWrite && openTelegramLink(`https://t.me/${s.username}`)}
+              disabled={!canWrite}
+              data-supporter={s.first_name}
+              className={`flex w-full items-center gap-3 rounded-[12px] px-2 py-1.5 text-left ${canWrite ? 'active:bg-fill' : ''}`}
+            >
+              <Avatar user={s} size={36} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[15px] font-medium">
+                  {fullName(s)}
+                  {s.is_me ? <span className="text-hint"> · вы</span> : null}
+                </span>
+                <span className="block truncate text-[13px] text-hint">
+                  {s.username ? `@${s.username}` : 'без username в Telegram'}
+                </span>
+              </span>
+              {canWrite && <span className="shrink-0 text-[13px] font-semibold text-link">Написать</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 border-t border-separator pt-3">
+        {!showForm && chat ? (
+          <>
+            <button
+              onClick={() => openTelegramLink(chat.link)}
+              data-open-pool-chat
+              className="flex h-11 w-full items-center justify-center gap-2 rounded-[12px] bg-accent text-[15px] font-semibold text-accent-text transition active:scale-[0.98]"
+            >
+              💬 Открыть чат сбора
+            </button>
+            <div className="mt-2 flex items-center justify-between gap-2 text-[13px] text-hint">
+              <span className="truncate">
+                {chat.set_by ? `Группу добавил(а) ${chat.set_by.first_name}` : 'Группа участников сбора'}
+              </span>
+              <button
+                onClick={() => {
+                  setLink(chat.link);
+                  setEditing(true);
+                }}
+                className="shrink-0 text-link"
+              >
+                Изменить
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="text-[15px] font-semibold">Чат, чтобы договориться о покупке</div>
+            <p className="mt-0.5 text-[13px] leading-snug text-hint">
+              Создайте группу в Telegram, добавьте участников и вставьте ссылку-приглашение из настроек группы — её
+              увидят только участники сбора
+            </p>
+            <form
+              className="mt-2.5 flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void save(link);
+              }}
+            >
+              <input
+                value={link}
+                onChange={(e) => setLink(e.target.value)}
+                placeholder="t.me/+…"
+                inputMode="url"
+                autoCapitalize="off"
+                autoComplete="off"
+                data-pool-chat-input
+                className="h-11 min-w-0 flex-1 rounded-[12px] bg-fill px-3 text-[16px] outline-none focus:ring-2 focus:ring-accent"
+              />
+              <button
+                type="submit"
+                disabled={busy || !link.trim()}
+                className="flex h-11 shrink-0 items-center rounded-[12px] bg-accent px-4 text-[15px] font-semibold text-accent-text disabled:opacity-50"
+              >
+                {busy ? <Loader2 size={16} className="animate-spin" /> : 'Сохранить'}
+              </button>
+            </form>
+            <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
+              {usernames.length > 0 && (
+                <button onClick={() => void copy()} className="font-semibold text-link">
+                  Скопировать {usernames.length === 1 ? 'username участника' : 'username участников'}
+                </button>
+              )}
+              {chat && editing && (
+                <>
+                  <button onClick={() => void save('')} className="text-destructive">
+                    Убрать ссылку
+                  </button>
+                  <button onClick={() => setEditing(false)} className="text-hint">
+                    Отмена
+                  </button>
+                </>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
