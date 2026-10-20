@@ -37,9 +37,14 @@ export interface Gift {
 export interface Member extends User {
   gift_count: number;
   min_price: number | null;
-  /** сколько собрано на каждый подарок, % по возрастанию цены */
+  /** сколько собрано на каждый подарок общего сбора, % по возрастанию цены */
   progress: number[];
   funded_count: number;
+  /** подарков в общем сборе — без забронированных */
+  pool_count: number;
+  /** сколько подарков кто-то дарит сам — без имён */
+  reserved_count: number;
+  my_reserved_count: number;
   my_pledge: number | null;
   leader: { id: string; emoji: string; title: string } | null;
 }
@@ -64,6 +69,9 @@ export interface FriendGift extends Gift {
   /** доля голосов, %; null — голосов нет */
   vote_pct: number | null;
   is_leader: boolean;
+  /** подарок кто-то дарит сам — кто именно, не сообщается */
+  reserved: boolean;
+  reserved_by_me: boolean;
 }
 
 export interface FriendPayload {

@@ -210,13 +210,15 @@ function MemberCard({ member: m, onClick }: { member: Member; onClick: () => voi
         <ProgressPills progress={m.progress} />
       </div>
       <div className="mt-2 text-[14px] text-hint">
-        {m.funded_count > 0 ? (
+        {m.pool_count === 0 ? (
+          'Все подарки уже кто-то дарит сам'
+        ) : m.funded_count > 0 ? (
           <>
             Хватает на{' '}
             <b className="text-text">
-              {m.funded_count} из {m.gift_count}
+              {m.funded_count} из {m.pool_count}
             </b>{' '}
-            {plural(m.gift_count, ['подарка', 'подарков', 'подарков'])}
+            {plural(m.pool_count, ['подарка', 'подарков', 'подарков'])}
           </>
         ) : best > 0 ? (
           <>
@@ -225,15 +227,23 @@ function MemberCard({ member: m, onClick }: { member: Member; onClick: () => voi
         ) : (
           'Сбор ещё не начался — будьте первым'
         )}
+        {m.reserved_count > 0 && m.pool_count > 0 && (
+          <> · ещё {m.reserved_count} дарят сами</>
+        )}
       </div>
 
-      {(m.my_pledge || m.leader) && (
+      {(m.my_pledge || m.leader || m.my_reserved_count > 0) && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {m.my_pledge ? (
             <span className="tabular rounded-full bg-accent/12 px-2.5 py-1 text-[13px] font-semibold text-accent">
               Ваш вклад · {formatMoney(m.my_pledge)}
             </span>
           ) : null}
+          {m.my_reserved_count > 0 && (
+            <span className="rounded-full bg-gold/20 px-2.5 py-1 text-[13px] font-semibold">
+              🎁 Вы дарите сами · {m.my_reserved_count}
+            </span>
+          )}
           {m.leader && (
             <span className="max-w-full truncate rounded-full bg-gold/20 px-2.5 py-1 text-[13px] font-medium">
               🏆 {m.leader.emoji} {m.leader.title}

@@ -221,9 +221,17 @@ await say('У Кати шкалы обновились сами — в проц�
 await katya.frame.locator(coffee).getByText('Хватает', { exact: true }).waitFor({ timeout: 10000 });
 await wait(2400);
 
-// 5. Голосование
+// 5. Бронь и голосование
 await step(4);
-await say('Голосование анонимное — видны только доли голосов');
+await say('Катя решила подарить книгу сама — бронирует её целиком');
+await wait(600);
+await tap(katya.app('[data-gift^="Книга"] [data-reserve]'), 700);
+await tap(page.locator('#phone-1004 .popup-layer button.ok'), 1200);
+await say('Книга ушла из общего сбора. Кто её дарит — не видит никто');
+await max.app('[data-reserved-gift^="Книга"]').waitFor({ timeout: 10000 });
+await max.scrollTo('[data-reserved-section]', 140);
+await wait(2600);
+await say('Голосование тоже анонимное — видны только доли голосов');
 await wait(800);
 await tap(katya.app(`${coffee} [data-vote]`), 1600);
 await max.app(`${coffee} [data-vote-pct="50"]`).waitFor({ timeout: 10000 });

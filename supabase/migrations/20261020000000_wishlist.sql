@@ -7,8 +7,8 @@
 --
 -- Всё происходит внутри компаний (rooms): вишлисты, взносы и голоса видят
 -- только участники компании, вступившие по ссылке-приглашению. Наружу не
--- уходят ни суммы, ни число скинувшихся, ни кто за что голосовал — только
--- проценты сбора и доли голосов.
+-- уходят ни суммы, ни число скинувшихся, ни кто за что голосовал, ни кто
+-- забронировал подарок — только проценты сбора, доли голосов и факт брони.
 --
 -- После применения миграции задайте токен бота:
 --   insert into app.settings (key, value) values ('bot_token', '123456:ABC...')
@@ -148,6 +148,24 @@ create table if not exists app.votes (
 
 create index if not exists votes_gift_idx on app.votes (gift_id);
 
+-- Бронь: участник дарит подарок целиком сам, без общего сбора. Кто
+-- забронировал, знает только он сам; владелец вишлиста не видит даже факта
+-- брони. Пропадает вместе с подарком и с выходом участника из компании.
+create table if not exists app.reservations (
+  gift_id uuid primary key,
+  room_id uuid not null,
+  owner_id bigint not null,
+  reserver_id bigint not null,
+  created_at timestamptz not null default now(),
+  foreign key (gift_id, room_id, owner_id)
+    references app.gifts (id, room_id, owner_id) on delete cascade,
+  foreign key (room_id, reserver_id)
+    references app.room_members (room_id, user_id) on delete cascade,
+  check (reserver_id <> owner_id)
+);
+
+create index if not exists reservations_reserver_idx on app.reservations (room_id, reserver_id);
+
 alter table app.settings enable row level security;
 alter table app.users enable row level security;
 alter table app.rooms enable row level security;
@@ -156,6 +174,7 @@ alter table app.gifts enable row level security;
 alter table app.gift_images enable row level security;
 alter table app.pledges enable row level security;
 alter table app.votes enable row level security;
+alter table app.reservations enable row level security;
 
 -- ---------------------------------------------------------------------------
 -- Проверка Telegram initData
@@ -322,6 +341,7 @@ as $$
     select v.gift_id, count(*) as n
     from app.votes v
     where v.room_id = p_room_id and v.recipient_id = p_recipient_id
+      and not exists (select 1 from app.reservations r where r.gift_id = v.gift_id)
     group by v.gift_id
   ),
   top as (
@@ -385,7 +405,9 @@ $$;
 --   pct        — собрано от цены вместе с моим взносом;
 --   others_pct — собрано без моего взноса (для предпросмотра суммы);
 --   funded     — хватает ли уже на подарок;
---   vote_pct   — доля голосов за подарок.
+--   vote_pct   — доля голосов за подарок;
+--   reserved / reserved_by_me — подарок кто-то дарит сам / это я.
+-- Кто именно забронировал подарок, не отдаётся никому.
 create or replace function app.friend_payload(p_room_id uuid, p_me bigint, p_friend bigint)
 returns jsonb
 language sql
@@ -404,6 +426,7 @@ as $$
     select v.gift_id, count(*) as n
     from app.votes v
     where v.room_id = p_room_id and v.recipient_id = p_friend
+      and not exists (select 1 from app.reservations r where r.gift_id = v.gift_id)
     group by v.gift_id
   ),
   totals as (
@@ -429,13 +452,17 @@ as $$
           'pct', app.pct(pool.total, g.price),
           'others_pct', app.pct(pool.total - pool.mine, g.price),
           'funded', pool.total >= g.price,
-          'vote_pct', case when totals.votes > 0 then round(coalesce(t.n, 0) * 100.0 / totals.votes)::integer end,
-          'is_leader', coalesce(g.id = app.leader_gift(p_room_id, p_friend), false)
+          'vote_pct', case when totals.votes > 0 and rv.gift_id is null
+            then round(coalesce(t.n, 0) * 100.0 / totals.votes)::integer end,
+          'is_leader', coalesce(g.id = app.leader_gift(p_room_id, p_friend), false),
+          'reserved', rv.gift_id is not null,
+          'reserved_by_me', coalesce(rv.reserver_id = p_me, false)
         )
         order by g.price, g.created_at
       )
       from app.gifts g
       left join tally t on t.gift_id = g.id
+      left join app.reservations rv on rv.gift_id = g.id
       where g.room_id = p_room_id and g.owner_id = p_friend
     ), '[]'::jsonb)
   )
@@ -504,6 +531,9 @@ begin
           'min_price', gs.min_price,
           'progress', coalesce(gs.progress, '[]'::jsonb),
           'funded_count', gs.funded_count,
+          'pool_count', gs.pool_count,
+          'reserved_count', gs.reserved_count,
+          'my_reserved_count', gs.my_reserved_count,
           'my_pledge', mine.amount,
           'leader', case when lg.id is not null
             then jsonb_build_object('id', lg.id, 'emoji', lg.emoji, 'title', lg.title) end
@@ -521,9 +551,15 @@ begin
         select
           count(*) as gift_count,
           min(g.price) as min_price,
-          jsonb_agg(app.pct(pl.total, g.price) order by g.price, g.created_at) as progress,
-          count(*) filter (where g.price <= pl.total) as funded_count
+          -- забронированные подарки дарят отдельно — в прогресс сбора не входят
+          jsonb_agg(app.pct(pl.total, g.price) order by g.price, g.created_at)
+            filter (where rv.gift_id is null) as progress,
+          count(*) filter (where rv.gift_id is null and g.price <= pl.total) as funded_count,
+          count(*) filter (where rv.gift_id is null) as pool_count,
+          count(rv.gift_id) as reserved_count,
+          count(*) filter (where rv.reserver_id = v_me) as my_reserved_count
         from app.gifts g
+        left join app.reservations rv on rv.gift_id = g.id
         where g.room_id = m.room_id and g.owner_id = u.id
       ) gs on true
       left join app.pledges mine
@@ -931,6 +967,9 @@ begin
     ) then
       raise exception 'Подарок не найден';
     end if;
+    if exists (select 1 from app.reservations r where r.gift_id = p_gift_id) then
+      raise exception 'Этот подарок уже кто-то дарит сам — выберите другой';
+    end if;
     insert into app.votes as v (room_id, voter_id, recipient_id, gift_id)
     values (p_room_id, v_me, p_friend_id, p_gift_id)
     on conflict (room_id, voter_id, recipient_id) do update
@@ -938,6 +977,54 @@ begin
   end if;
 
   return app.friend_payload(p_room_id, v_me, p_friend_id);
+end;
+$$;
+
+-- Забронировать подарок друга (подарю сам) или снять свою бронь.
+-- Забронированный подарок выпадает из общего сбора: голоса за него сбрасываются.
+create or replace function public.wl_reserve_gift(p_init_data text, p_room_id uuid, p_gift_id uuid, p_reserve boolean)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_me bigint := app.auth(p_init_data);
+  v_gift app.gifts;
+  v_reserver bigint;
+begin
+  perform app.require_member(p_room_id, v_me);
+  select g.* into v_gift from app.gifts g where g.id = p_gift_id and g.room_id = p_room_id;
+  if v_gift.id is null then
+    raise exception 'Подарок не найден';
+  end if;
+  if v_gift.owner_id = v_me then
+    raise exception 'Свой подарок бронировать не нужно 🙂';
+  end if;
+
+  if coalesce(p_reserve, true) then
+    select r.reserver_id into v_reserver from app.reservations r where r.gift_id = p_gift_id;
+    if v_reserver is not null and v_reserver <> v_me then
+      raise exception 'Этот подарок уже кто-то дарит';
+    end if;
+    if v_reserver is null then
+      if (select count(*) from app.reservations r where r.room_id = p_room_id and r.reserver_id = v_me) >= 20 then
+        raise exception 'Можно забронировать не больше 20 подарков';
+      end if;
+      insert into app.reservations (gift_id, room_id, owner_id, reserver_id)
+      values (p_gift_id, p_room_id, v_gift.owner_id, v_me)
+      on conflict (gift_id) do nothing;
+      if not found then
+        raise exception 'Этот подарок уже кто-то дарит';
+      end if;
+      delete from app.votes v where v.gift_id = p_gift_id;
+    end if;
+  else
+    delete from app.reservations r where r.gift_id = p_gift_id and r.reserver_id = v_me;
+  end if;
+
+  return app.friend_payload(p_room_id, v_me, v_gift.owner_id);
 end;
 $$;
 

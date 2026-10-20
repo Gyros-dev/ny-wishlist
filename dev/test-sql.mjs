@@ -374,3 +374,93 @@ describe('фото подарков', () => {
     assert.equal(rows[0].n, 0);
   });
 });
+
+describe('бронь «подарю сам»', () => {
+  const reserve = (id, title, on = true) =>
+    rpc('wl_reserve_gift', { p_init_data: as(id), p_room_id: friends.id, p_gift_id: gifts[title], p_reserve: on });
+  const socksOf = (res) => res.gifts.find((g) => g.title === 'Носки с оленями');
+
+  test('бронь сбрасывает голоса за подарок и видна забронировавшему', async () => {
+    // Оля скидывается Мише и голосует за носки
+    await rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002, p_gift_id: gifts['Носки с оленями'] });
+    const res = await reserve(1004, 'Носки с оленями');
+    const socks = socksOf(res);
+    assert.equal(socks.reserved, true);
+    assert.equal(socks.reserved_by_me, true);
+    assert.equal(socks.vote_pct, null);
+    const olya = await rpc('wl_friend', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002 });
+    assert.equal(olya.my_vote, null, 'голос Оли за носки сброшен');
+  });
+
+  test('остальные видят бронь, но не знают, чья она', async () => {
+    const res = await rpc('wl_friend', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002 });
+    const socks = socksOf(res);
+    assert.equal(socks.reserved, true);
+    assert.equal(socks.reserved_by_me, false);
+    const json = JSON.stringify(res);
+    assert.ok(!json.includes('1004') && !json.includes('Катя') && !json.includes('reserver'));
+  });
+
+  test('владелец не видит даже факта брони', async () => {
+    const res = await rpc('wl_bootstrap', { p_init_data: as(1002), p_room_id: friends.id });
+    assert.ok(!JSON.stringify(res.gifts).includes('reserv'));
+    await rejects(
+      rpc('wl_reserve_gift', { p_init_data: as(1002), p_room_id: friends.id, p_gift_id: gifts['Лонгборд'], p_reserve: true }),
+      { message: /Свой подарок/ },
+    );
+  });
+
+  test('второй желающий получает отказ, чужак — WL403', async () => {
+    await rejects(reserve(1005, 'Носки с оленями'), { message: /уже кто-то дарит/ });
+    await rejects(
+      rpc('wl_reserve_gift', { p_init_data: as(1008), p_room_id: friends.id, p_gift_id: gifts['Носки с оленями'], p_reserve: true }),
+      { code: 'WL403' },
+    );
+    // повторная бронь своим же — не ошибка
+    assert.equal(socksOf(await reserve(1004, 'Носки с оленями')).reserved_by_me, true);
+  });
+
+  test('за забронированный подарок нельзя голосовать', async () => {
+    await rejects(
+      rpc('wl_vote', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002, p_gift_id: gifts['Носки с оленями'] }),
+      { message: /уже кто-то дарит сам/ },
+    );
+  });
+
+  test('забронированные подарки не входят в прогресс сбора', async () => {
+    const olya = await rpc('wl_bootstrap', { p_init_data: as(1003), p_room_id: friends.id });
+    const misha = olya.members.find((m) => m.id === 1002);
+    assert.equal(misha.gift_count, 3);
+    assert.equal(misha.pool_count, 2);
+    assert.equal(misha.reserved_count, 1);
+    assert.equal(misha.my_reserved_count, 0);
+    assert.equal(misha.progress.length, 2);
+    const katya = await rpc('wl_bootstrap', { p_init_data: as(1004), p_room_id: friends.id });
+    assert.equal(katya.members.find((m) => m.id === 1002).my_reserved_count, 1);
+  });
+
+  test('снять бронь может только тот, кто её поставил', async () => {
+    await reserve(1003, 'Носки с оленями', false);
+    let res = await rpc('wl_friend', { p_init_data: as(1003), p_room_id: friends.id, p_friend_id: 1002 });
+    assert.equal(socksOf(res).reserved, true, 'чужая бронь осталась');
+    res = await reserve(1004, 'Носки с оленями', false);
+    assert.equal(socksOf(res).reserved, false);
+  });
+
+  test('бронь пропадает с подарком и с выходом из компании', async () => {
+    const room = await rpc('wl_create_room', { p_init_data: as(1007), p_name: 'Бронь', p_currency: 'EUR' });
+    await rpc('wl_join_room', { p_init_data: as(1006), p_invite_code: room.invite_code });
+    const add = (title) => rpc('wl_save_gift', { p_init_data: as(1007), p_room_id: room.id, p_gift_id: null, p_title: title, p_price: 10, p_emoji: null, p_link: null });
+    const a = await add('Шарф');
+    const b = await add('Кружка');
+    const res = (gift) => rpc('wl_reserve_gift', { p_init_data: as(1006), p_room_id: room.id, p_gift_id: gift.id, p_reserve: true });
+    await res(a);
+    await res(b);
+    const count = async () => (await db.query('select count(*)::int as n from app.reservations where room_id = $1', [room.id])).rows[0].n;
+    assert.equal(await count(), 2);
+    await rpc('wl_delete_gift', { p_init_data: as(1007), p_gift_id: a.id });
+    assert.equal(await count(), 1);
+    await rpc('wl_leave_room', { p_init_data: as(1006), p_room_id: room.id });
+    assert.equal(await count(), 0);
+  });
+});

@@ -100,6 +100,10 @@ export const api = {
   setPledge: (roomId: string, friendId: number, amount: number) =>
     rpc<FriendPayload>('wl_set_pledge', { p_room_id: roomId, p_friend_id: friendId, p_amount: amount }),
 
+  /** reserve: true — «подарю сам», false — снять свою бронь */
+  reserveGift: (roomId: string, giftId: string, reserve: boolean) =>
+    rpc<FriendPayload>('wl_reserve_gift', { p_room_id: roomId, p_gift_id: giftId, p_reserve: reserve }),
+
   vote: (roomId: string, friendId: number, giftId: string | null) =>
     rpc<FriendPayload>('wl_vote', { p_room_id: roomId, p_friend_id: friendId, p_gift_id: giftId }),
 };
