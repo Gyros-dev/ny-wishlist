@@ -36,7 +36,7 @@ export function Toaster() {
   const icon = item?.kind === 'success' ? '✓' : item?.kind === 'error' ? '!' : null;
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-3 z-[60] flex justify-center px-4">
+    <div className="pointer-events-none fixed inset-x-0 top-[calc(var(--inset-top)+12px)] z-[60] flex justify-center px-4">
       <AnimatePresence>
         {item && (
           <motion.div

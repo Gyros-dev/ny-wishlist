@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="36%" r="78%">
+      <stop offset="0" stop-color="#6048d2"/>
+      <stop offset="0.55" stop-color="#2c2f88"/>
+      <stop offset="1" stop-color="#131536"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffcf6e" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#ffcf6e" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fur" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c3c9d8"/>
+      <stop offset="1" stop-color="#8c95aa"/>
+    </linearGradient>
+    <linearGradient id="furDark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a8afc2"/>
+      <stop offset="1" stop-color="#78819a"/>
+    </linearGradient>
+    <linearGradient id="box" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6575"/>
+      <stop offset="1" stop-color="#cf2a3b"/>
+    </linearGradient>
+    <linearGradient id="lid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff8090"/>
+      <stop offset="1" stop-color="#e03446"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe597"/>
+      <stop offset="1" stop-color="#f0a33a"/>
+    </linearGradient>
+    <linearGradient id="hat" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff6470"/>
+      <stop offset="1" stop-color="#c41f2e"/>
+    </linearGradient>
+    <linearGradient id="snow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f7ff"/>
+      <stop offset="1" stop-color="#cfd9f5"/>
+    </linearGradient>
+    <symbol id="star" viewBox="-1 -1 2 2">
+      <path d="M0 -1 Q0 0 1 0 Q0 0 0 1 Q0 0 -1 0 Q0 0 0 -1Z" fill="#ffe597"/>
+    </symbol>
+  </defs>
+
+  <!-- фон: зимняя ночь (для баннера вырезается) -->
+  <!-- backdrop:start -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="512" cy="640" r="430" fill="url(#glow)"/>
+  <g fill="#ffffff">
+    <circle cx="120" cy="140" r="6" opacity="0.7"/>
+    <circle cx="210" cy="250" r="4" opacity="0.5"/>
+    <circle cx="86" cy="420" r="5" opacity="0.6"/>
+    <circle cx="300" cy="96" r="5" opacity="0.6"/>
+    <circle cx="420" cy="170" r="3" opacity="0.5"/>
+    <circle cx="880" cy="120" r="6" opacity="0.7"/>
+    <circle cx="950" cy="300" r="4" opacity="0.5"/>
+    <circle cx="820" cy="380" r="3" opacity="0.5"/>
+    <circle cx="930" cy="560" r="5" opacity="0.6"/>
+    <circle cx="70" cy="640" r="4" opacity="0.5"/>
+    <circle cx="160" cy="560" r="3" opacity="0.4"/>
+    <circle cx="610" cy="60" r="4" opacity="0.5"/>
+    <circle cx="980" cy="760" r="4" opacity="0.5"/>
+    <circle cx="40" cy="820" r="5" opacity="0.5"/>
+  </g>
+  <use href="#star" x="196" y="520" width="52" height="52"/>
+  <use href="#star" x="810" y="430" width="40" height="40"/>
+  <use href="#star" x="236" y="300" width="28" height="28"/>
+  <use href="#star" x="828" y="660" width="60" height="60"/>
+  <use href="#star" x="150" y="740" width="32" height="32"/>
+  <use href="#star" x="868" y="236" width="24" height="24"/>
+
+  <!-- сугроб -->
+  <path d="M0 892 Q 180 842 360 872 Q 520 900 690 864 Q 860 830 1024 870 L1024 1024 L0 1024 Z" fill="url(#snow)"/>
+  <!-- backdrop:end -->
+  <ellipse cx="512" cy="912" rx="300" ry="38" fill="#9fb0e0" opacity="0.55"/>
+
+  <!-- хвост -->
+  <path d="M700 850 C 830 884, 912 820, 890 724 C 874 654, 930 612, 968 646" fill="none" stroke="#e892a8" stroke-width="26" stroke-linecap="round"/>
+  <path d="M700 850 C 830 884, 912 820, 890 724 C 874 654, 930 612, 968 646" fill="none" stroke="#f6b6c6" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- туловище -->
+  <ellipse cx="512" cy="722" rx="238" ry="206" fill="url(#fur)"/>
+  <ellipse cx="512" cy="764" rx="162" ry="142" fill="#e7eaf2"/>
+
+  <!-- лапки снизу -->
+  <ellipse cx="402" cy="902" rx="72" ry="30" fill="#f2a6b9"/>
+  <ellipse cx="622" cy="902" rx="72" ry="30" fill="#f2a6b9"/>
+  <g stroke="#d9849b" stroke-width="4" stroke-linecap="round">
+    <line x1="372" y1="896" x2="372" y2="914"/>
+    <line x1="400" y1="894" x2="400" y2="916"/>
+    <line x1="428" y1="896" x2="428" y2="914"/>
+    <line x1="596" y1="896" x2="596" y2="914"/>
+    <line x1="624" y1="894" x2="624" y2="916"/>
+    <line x1="652" y1="896" x2="652" y2="914"/>
+  </g>
+
+  <!-- ушки -->
+  <circle cx="294" cy="292" r="112" fill="url(#furDark)"/>
+  <circle cx="300" cy="298" r="74" fill="#f6b0c1"/>
+  <circle cx="738" cy="300" r="112" fill="url(#furDark)"/>
+  <circle cx="732" cy="306" r="74" fill="#f6b0c1"/>
+
+  <!-- голова -->
+  <ellipse cx="512" cy="442" rx="232" ry="196" fill="url(#fur)"/>
+
+  <!-- новогодняя шапка -->
+  <path d="M378 258 C 392 150, 470 78, 584 76 C 688 74, 768 132, 782 212 C 748 196, 704 194, 652 248 Z" fill="url(#hat)"/>
+  <path d="M600 92 C 680 96, 744 140, 770 196" fill="none" stroke="#ff9aa3" stroke-width="10" stroke-linecap="round" opacity="0.6"/>
+  <rect x="356" y="230" width="318" height="66" rx="33" fill="#f7f9ff" transform="rotate(-7 515 263)"/>
+  <rect x="356" y="262" width="318" height="34" rx="17" fill="#dfe5f5" transform="rotate(-7 515 263)"/>
+  <circle cx="790" cy="222" r="42" fill="#f7f9ff"/>
+  <circle cx="778" cy="210" r="14" fill="#ffffff"/>
+
+  <!-- мордочка -->
+  <ellipse cx="512" cy="518" rx="112" ry="80" fill="#d6dbe6"/>
+  <ellipse cx="370" cy="498" rx="40" ry="23" fill="#f590a9" opacity="0.75"/>
+  <ellipse cx="654" cy="498" rx="40" ry="23" fill="#f590a9" opacity="0.75"/>
+
+  <ellipse cx="428" cy="430" rx="37" ry="45" fill="#1c1d2b"/>
+  <ellipse cx="596" cy="430" rx="37" ry="45" fill="#1c1d2b"/>
+  <circle cx="442" cy="412" r="14" fill="#ffffff"/>
+  <circle cx="610" cy="412" r="14" fill="#ffffff"/>
+  <circle cx="419" cy="450" r="6" fill="#ffffff" opacity="0.8"/>
+  <circle cx="587" cy="450" r="6" fill="#ffffff" opacity="0.8"/>
+
+  <ellipse cx="512" cy="484" rx="29" ry="20" fill="#ec7896"/>
+  <ellipse cx="504" cy="477" rx="10" ry="5" fill="#ffffff" opacity="0.7"/>
+
+  <g fill="none" stroke="#3b3446" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M512 504 L512 522"/>
+    <path d="M476 522 Q 494 542 512 522 Q 530 542 548 522"/>
+  </g>
+  <rect x="499" y="526" width="13" height="22" rx="3" fill="#ffffff" stroke="#cfd4df" stroke-width="2"/>
+  <rect x="512" y="526" width="13" height="22" rx="3" fill="#ffffff" stroke="#cfd4df" stroke-width="2"/>
+
+  <g stroke="#f3f5fb" stroke-width="4" stroke-linecap="round" opacity="0.9">
+    <line x1="404" y1="506" x2="288" y2="484"/>
+    <line x1="402" y1="524" x2="282" y2="532"/>
+    <line x1="408" y1="540" x2="298" y2="574"/>
+    <line x1="620" y1="506" x2="736" y2="484"/>
+    <line x1="622" y1="524" x2="742" y2="532"/>
+    <line x1="616" y1="540" x2="726" y2="574"/>
+  </g>
+
+  <!-- ручки -->
+  <ellipse cx="378" cy="694" rx="50" ry="72" fill="url(#furDark)" transform="rotate(22 378 694)"/>
+  <ellipse cx="646" cy="694" rx="50" ry="72" fill="url(#furDark)" transform="rotate(-22 646 694)"/>
+
+  <!-- подарок -->
+  <rect x="388" y="662" width="248" height="200" rx="20" fill="url(#box)"/>
+  <rect x="388" y="682" width="248" height="22" fill="#000000" opacity="0.12"/>
+  <g fill="#ffd27a" opacity="0.55">
+    <circle cx="426" cy="730" r="8"/>
+    <circle cx="598" cy="760" r="8"/>
+    <circle cx="440" cy="822" r="8"/>
+    <circle cx="590" cy="826" r="6"/>
+    <circle cx="455" cy="776" r="5"/>
+  </g>
+  <rect x="492" y="660" width="40" height="202" fill="url(#gold)"/>
+  <rect x="370" y="626" width="284" height="64" rx="16" fill="url(#lid)"/>
+  <rect x="492" y="626" width="40" height="64" fill="url(#gold)"/>
+  <path d="M512 626 C 468 560, 404 574, 426 618 C 438 644, 490 636, 512 626 Z" fill="url(#gold)" stroke="#d98a24" stroke-width="3"/>
+  <path d="M512 626 C 556 560, 620 574, 598 618 C 586 644, 534 636, 512 626 Z" fill="url(#gold)" stroke="#d98a24" stroke-width="3"/>
+  <ellipse cx="512" cy="628" rx="24" ry="19" fill="#f2a63c" stroke="#d98a24" stroke-width="3"/>
+
+  <!-- лапки на подарке -->
+  <ellipse cx="380" cy="728" rx="38" ry="31" fill="#f2a6b9"/>
+  <ellipse cx="644" cy="728" rx="38" ry="31" fill="#f2a6b9"/>
+  <g stroke="#d9849b" stroke-width="4" stroke-linecap="round">
+    <line x1="394" y1="712" x2="406" y2="716"/>
+    <line x1="398" y1="728" x2="410" y2="728"/>
+    <line x1="630" y1="712" x2="618" y2="716"/>
+    <line x1="626" y1="728" x2="614" y2="728"/>
+  </g>
+</svg>

@@ -19,6 +19,21 @@
   --fill: color-mix(in srgb, var(--text) 7%, transparent);
   --success: #2fb455;
   --gold: #f4b13e;
+
+  /*
+    Отступы от краёв экрана. В полноэкранном режиме Telegram (Bot API 8.0)
+    контент уходит под статус-бар, а сверху висят кнопки «Закрыть» и «⋯»:
+    safe-area — это вырез и статус-бар, content-safe-area — зона кнопок.
+    Вне полноэкранного режима обе равны нулю.
+  */
+  --inset-top: calc(
+    max(var(--tg-safe-area-inset-top, 0px), env(safe-area-inset-top, 0px)) +
+      var(--tg-content-safe-area-inset-top, 0px)
+  );
+  --inset-bottom: calc(
+    max(var(--tg-safe-area-inset-bottom, 0px), env(safe-area-inset-bottom, 0px)) +
+      var(--tg-content-safe-area-inset-bottom, 0px)
+  );
 }
 
 @theme inline {
@@ -81,6 +96,8 @@ textarea {
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   background: var(--bg);
+  padding-top: var(--inset-top);
+  padding-bottom: var(--inset-bottom);
 }
 
 .tabular {

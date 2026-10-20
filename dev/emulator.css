@@ -938,3 +938,51 @@ body.demo .phone-tools {
   background: var(--card);
   font-size: 16px;
 }
+
+/* ---------- полноэкранный режим Telegram ---------- */
+.fs-controls {
+  display: none;
+}
+
+.screen.fullscreen .tg-header {
+  display: none;
+}
+
+.screen.fullscreen .statusbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  background: transparent;
+  pointer-events: none;
+}
+
+.screen.fullscreen .fs-controls {
+  position: absolute;
+  top: 54px;
+  left: 14px;
+  right: 14px;
+  z-index: 4;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.fs-pill {
+  height: 32px;
+  padding: 0 13px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 16px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(60, 60, 67, 0.55);
+  backdrop-filter: blur(18px);
+  pointer-events: auto;
+  cursor: pointer;
+}

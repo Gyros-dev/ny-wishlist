@@ -1,4 +1,4 @@
-import { ChevronDown } from 'lucide-react';
+import { ArrowLeftRight, ChevronDown } from 'lucide-react';
 import { useMemo } from 'react';
 import { newYearCountdown, plural } from '../utils/format';
 
@@ -73,6 +73,15 @@ export function Hero({
             <h1 className="mt-1 text-[26px] leading-tight font-bold">{title}</h1>
           )}
           <p className="mt-1 text-[14px] leading-snug text-white/80">{subtitle}</p>
+          {onTitleClick && (
+            <button
+              onClick={onTitleClick}
+              data-room-switch-pill
+              className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[13px] font-semibold ring-1 ring-white/25 transition active:bg-white/25"
+            >
+              <ArrowLeftRight size={14} /> Сменить компанию
+            </button>
+          )}
         </div>
         <div className="flex h-[84px] w-[84px] shrink-0 flex-col items-center justify-center rounded-[20px] bg-white/14 ring-1 ring-white/25 backdrop-blur-sm">
           {celebrating ? (

@@ -42,7 +42,8 @@ Telegram ─► GitHub Pages (React) ── POST /rest/v1/rpc/wl_* + initData �
 ### 1. Бот
 
 1. В [@BotFather](https://t.me/BotFather) выполните `/newbot` и сохраните токен.
-2. Выполните `/newapp`, выберите бота и укажите URL с GitHub Pages (шаг 3), например `https://<user>.github.io/<repo>/`. Короткое имя приложения (short name), например `wishlist`, понадобится для ссылок «Поделиться». Можно вместо этого настроить Main Mini App в *Bot Settings → Configure Mini App*.
+2. В `/mybots` → бот → *Bot Settings → Configure Mini App* включите Main Mini App с URL GitHub Pages (шаг 3), например `https://<user>.github.io/<repo>/`. Ссылки-приглашения тогда будут вида `t.me/<бот>?startapp=…`. Если вместо этого заводите приложение через `/newapp`, его short name задайте в переменной `APP_SHORT_NAME`.
+3. Оформление: `/setuserpic` → [`branding/bot-avatar.png`](branding/bot-avatar.png) (крыса с подарком), `/setdescriptionpic` → [`branding/bot-description.png`](branding/bot-description.png). Исходник — [`branding/rat.svg`](branding/rat.svg), PNG пересобирает `node dev/make-branding.mjs`.
 
 ### 2. Supabase
 
@@ -84,7 +85,7 @@ npm install
 npm run emulator
 ```
 
-Команда поднимает настоящий Postgres в WASM ([PGlite](https://pglite.dev)) с той же миграцией и демо-данными (компания «Друзья · Новый год» в донгах и «Работа» в рублях), а также Vite. Эмулятор клиента Telegram откроется по адресу `http://127.0.0.1:5173/dev/emulator.html`. С параметром `?phones=1005:light:chat,1004:dark` левый телефон начинает с чата Telegram: кнопка «Пригласить» на правом присылает туда ссылку, а по ней открывается экран приглашения. Мини-приложение загружается в нём так же, как в web.telegram.org: initData передаётся в hash и подписывается тестовым токеном. Эмулятор рисует шапку, MainButton, кнопку «Назад» и системные алерты и отвечает на события `telegram-web-app.js`. Над каждым телефоном можно сменить пользователя и тему, а кнопка «Сбросить демо-данные» возвращает сид.
+Команда поднимает настоящий Postgres в WASM ([PGlite](https://pglite.dev)) с той же миграцией и демо-данными (компания «Друзья · Новый год» в донгах и «Работа» в рублях), а также Vite. Эмулятор клиента Telegram откроется по адресу `http://127.0.0.1:5173/dev/emulator.html`. С параметром `?phones=1005:light:chat,1004:dark` левый телефон начинает с чата Telegram: кнопка «Пригласить» на правом присылает туда ссылку, а по ней открывается экран приглашения. Мини-приложение загружается в нём так же, как в web.telegram.org: initData передаётся в hash и подписывается тестовым токеном. Эмулятор рисует шапку, MainButton, кнопку «Назад» и системные алерты и отвечает на события `telegram-web-app.js`. Над каждым телефоном можно сменить пользователя и тему, а кнопка «Сбросить демо-данные» возвращает сид. Параметр `&fullscreen=1` включает полноэкранный режим Telegram, как на iOS: без шапки, с плавающими кнопками «Закрыть» и «⋯» и отступами safe area. Приложение учитывает их через `--tg-safe-area-inset-*` и `--tg-content-safe-area-inset-*`.
 
 ```bash
 npm run test:sql      # тесты миграции: подпись, права, сборы, голоса, фото

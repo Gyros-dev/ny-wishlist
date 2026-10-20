@@ -15,7 +15,7 @@ export function Lightbox({ src, caption, onClose }: { src: string | null; captio
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           onClick={onClose}
-          className="fixed inset-0 z-[65] flex flex-col items-center justify-center bg-black/88 px-4"
+          className="fixed inset-0 z-[65] flex flex-col items-center justify-center bg-black/88 px-4 pt-[var(--inset-top)] pb-[var(--inset-bottom)]"
           data-lightbox
         >
           <motion.img

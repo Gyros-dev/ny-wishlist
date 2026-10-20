@@ -222,7 +222,7 @@ interface RoomsSheetProps {
 
 export function RoomsSheet(props: RoomsSheetProps) {
   return (
-    <Sheet open={props.open} onClose={props.onClose} title="Компании">
+    <Sheet open={props.open} onClose={props.onClose} title="Ваши компании">
       <RoomsContent {...props} />
     </Sheet>
   );
@@ -285,7 +285,7 @@ function RoomsContent({ boot, onSwitch, onInvite, onCreate, onLeave }: RoomsShee
       </div>
 
       <div>
-        <div className="mb-2 px-1 text-[13px] font-semibold tracking-wide text-section uppercase">Ваши компании</div>
+        <div className="mb-2 px-1 text-[13px] font-semibold tracking-wide text-section uppercase">Сменить компанию</div>
         <div className="overflow-hidden rounded-[16px] bg-card">
           {boot.rooms.map((r, i) => (
             <button

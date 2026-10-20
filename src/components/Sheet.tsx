@@ -33,7 +33,7 @@ export function Sheet({
           animate={{ y: 0 }}
           exit={{ y: '100%' }}
           transition={{ type: 'spring', damping: 34, stiffness: 320 }}
-          className="fixed inset-x-0 bottom-0 z-50 max-h-[92%] overflow-y-auto rounded-t-[22px] bg-bg pb-[calc(env(safe-area-inset-bottom)+20px)]"
+          className="fixed inset-x-0 bottom-0 z-50 max-h-[calc(100%-var(--inset-top)-8px)] overflow-y-auto rounded-t-[22px] bg-bg pb-[calc(var(--inset-bottom)+20px)]"
           data-sheet
         >
           <div className="sticky top-0 z-10 bg-bg px-5 pt-2.5 pb-2">

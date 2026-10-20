@@ -10,6 +10,12 @@
 const params = new URLSearchParams(location.search);
 const API = params.get('api') ?? 'http://localhost:54321';
 const demo = params.has('demo');
+// Полноэкранный режим Telegram (Bot API 8.0): без шапки, с плавающими кнопками
+const fullscreen = params.has('fullscreen');
+// Отступы, которые iOS-клиент сообщает в полноэкранном режиме
+const FULLSCREEN_SAFE_AREA = { top: 50, bottom: 0, left: 0, right: 0 };
+const FULLSCREEN_CONTENT_SAFE_AREA = { top: 46, bottom: 0, left: 0, right: 0 };
+const ZERO_INSETS = { top: 0, bottom: 0, left: 0, right: 0 };
 document.body.classList.toggle('demo', demo);
 
 const THEMES = {
@@ -146,6 +152,10 @@ class Phone {
             <div class="tg-title"><b>Вишлист 2027</b><small>мини-приложение</small></div>
             <span class="tg-menu">···</span>
           </div>
+          <div class="fs-controls">
+            <button class="fs-pill fs-left">✕ <span>Закрыть</span></button>
+            <span class="fs-pill">⌄&nbsp;&nbsp;···</span>
+          </div>
           <div class="viewport">
             <div class="splash">🎁</div>
             <iframe title="mini app" allow="clipboard-write"></iframe>
@@ -169,6 +179,12 @@ class Phone {
     this.iframe = this.root.querySelector('iframe');
     this.splash = this.root.querySelector('.splash');
     this.left = this.root.querySelector('.tg-left');
+    this.fsLeft = this.root.querySelector('.fs-left');
+    this.screen.classList.toggle('fullscreen', fullscreen);
+    this.fsLeft.addEventListener('click', () => {
+      if (this.backVisible) this.post('back_button_pressed');
+      else this.load();
+    });
     this.bottomBar = this.root.querySelector('.bottom-bar');
     this.mainButton = this.root.querySelector('.main-button');
     this.popupLayer = this.root.querySelector('.popup-layer');
@@ -286,6 +302,7 @@ class Phone {
       tgWebAppVersion: '8.0',
       tgWebAppPlatform: 'ios',
       tgWebAppThemeParams: JSON.stringify(this.theme),
+      ...(fullscreen ? { tgWebAppFullscreen: '1' } : {}),
     });
     // ?u= — чтобы у каждого телефона был свой URL и браузер не путал iframe
     this.iframe.src = `/?u=${this.userId}&t=${Date.now()}#${hash.toString()}`;
@@ -306,6 +323,7 @@ class Phone {
     this.backVisible = visible;
     this.left.classList.toggle('back', visible);
     this.left.querySelector('span').textContent = visible ? 'Назад' : 'Закрыть';
+    this.fsLeft.innerHTML = visible ? '‹ <span>Назад</span>' : '✕ <span>Закрыть</span>';
   }
 
   setMainButton(p) {
@@ -370,10 +388,10 @@ class Phone {
         this.sendViewport();
         break;
       case 'web_app_request_safe_area':
-        this.post('safe_area_changed', { top: 0, bottom: 0, left: 0, right: 0 });
+        this.post('safe_area_changed', fullscreen ? FULLSCREEN_SAFE_AREA : ZERO_INSETS);
         break;
       case 'web_app_request_content_safe_area':
-        this.post('content_safe_area_changed', { top: 0, bottom: 0, left: 0, right: 0 });
+        this.post('content_safe_area_changed', fullscreen ? FULLSCREEN_CONTENT_SAFE_AREA : ZERO_INSETS);
         break;
       case 'web_app_setup_main_button':
         this.setMainButton(data);
