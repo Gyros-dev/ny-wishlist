@@ -9,7 +9,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "emulator": "node dev/emulator.mjs",
-    "test:sql": "node --test dev/test-sql.mjs",
+    "test:sql": "node --test dev/test-sql.mjs dev/test-bot.mjs",
     "demo:record": "node dev/record-demo.mjs"
   },
   "dependencies": {

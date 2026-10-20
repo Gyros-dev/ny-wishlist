@@ -108,6 +108,35 @@ export function openTelegramLink(url: string) {
   window.open(url, '_blank', 'noopener');
 }
 
+/** Системный выбор или создание чата (Bot API 9.6+). false — не поддерживается или отменили. */
+export function requestChat(buttonId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const webApp = tg as unknown as { requestChat?: (id: string, cb: (sent: boolean) => void) => void } | null;
+    if (!webApp?.requestChat || !atLeast('9.6')) return resolve(false);
+    try {
+      webApp.requestChat(buttonId, (sent) => resolve(!!sent));
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+export const supportsRequestChat = () => atLeast('9.6');
+
+/** Разрешил ли пользователь боту писать ему в личку (на момент запуска). */
+export const allowsWriteToPm = (): boolean => !!tg?.initDataUnsafe?.user?.allows_write_to_pm;
+
+export function requestWriteAccess(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (!tg || !atLeast('6.9')) return resolve(false);
+    try {
+      tg.requestWriteAccess((granted) => resolve(!!granted));
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 export function closeApp() {
   try {
     tg?.close();

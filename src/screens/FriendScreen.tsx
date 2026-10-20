@@ -1,7 +1,7 @@
 import { motion, useIsPresent } from 'framer-motion';
 import { Check, ExternalLink, Loader2, Lock } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, api, errorMessage } from '../api/client';
+import { ApiError, api, errorMessage, prepareChat } from '../api/client';
 import type { FriendGift, FriendPayload, Member, Supporter } from '../api/types';
 import { AmountInput } from '../components/AmountInput';
 import { Avatar } from '../components/Avatar';
@@ -12,8 +12,19 @@ import { ProgressBar, ProgressPills } from '../components/ProgressBar';
 import { toast } from '../components/Toast';
 import { usePolling } from '../hooks/usePolling';
 import { Layer, useBackButton, useMainButton } from '../telegram/buttons';
-import { confirmAction, haptic, hapticNotification, hapticSelection, openLink, openTelegramLink } from '../telegram/webapp';
-import { copyText } from '../utils/share';
+import {
+  allowsWriteToPm,
+  confirmAction,
+  haptic,
+  hapticNotification,
+  hapticSelection,
+  openLink,
+  openTelegramLink,
+  requestChat,
+  requestWriteAccess,
+  supportsRequestChat,
+} from '../telegram/webapp';
+import { copyText, startGroupLink } from '../utils/share';
 import {
   currencySymbol,
   formatMoney,
@@ -68,6 +79,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
   const [burst, setBurst] = useState(0);
   const [photo, setPhoto] = useState<{ src: string; caption: string } | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
+  const [creatingChat, setCreatingChat] = useState(false);
 
   // Ответы опроса могут прийти позже ответа на действие пользователя —
   // применяем только то, что отправлено не раньше последнего применённого.
@@ -194,6 +206,35 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
       return false;
     } finally {
       setChatBusy(false);
+    }
+  };
+
+  // «Создать чат сбора»: системный выбор/создание чата (Bot API 9.6+),
+  // на старых клиентах — ссылка «добавить бота в группу»
+  const createChat = async () => {
+    if (creatingChat) return;
+    setCreatingChat(true);
+    try {
+      const { buttonId, startParam } = await prepareChat(roomId, friendId);
+      if (buttonId && supportsRequestChat()) {
+        if (await requestChat(buttonId)) {
+          hapticNotification('success');
+          toast('Чат выбран — бот разошлёт приглашения участникам сбора', 'success');
+          window.setTimeout(() => void load(), 2500);
+        }
+        return;
+      }
+      const link = startGroupLink(startParam);
+      if (!link) {
+        toast('Чтобы создать чат, задайте VITE_BOT_USERNAME', 'error');
+        return;
+      }
+      openTelegramLink(link);
+      toast('Выберите или создайте группу и добавьте в неё бота — он разошлёт приглашения');
+    } catch (err) {
+      if (!handleError(err)) toast(errorMessage(err), 'error');
+    } finally {
+      setCreatingChat(false);
     }
   };
 
@@ -368,7 +409,9 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 supporters={data.supporters}
                 chat={data.pool_chat}
                 busy={chatBusy}
+                creating={creatingChat}
                 onSaveChat={savePoolChat}
+                onCreateChat={() => void createChat()}
               />
             )}
 
@@ -658,26 +701,37 @@ function ReservedCard({
   );
 }
 
-/** Кто скидывается вместе со мной и ссылка на их Telegram-группу. Видят только участники сбора. */
+/** Кто скидывается вместе со мной и их чат в Telegram. Видят только участники сбора. */
 function PoolTeam({
   supporters,
   chat,
   busy,
+  creating,
   onSaveChat,
+  onCreateChat,
 }: {
   supporters: Supporter[];
   chat: FriendPayload['pool_chat'];
   busy: boolean;
+  creating: boolean;
   onSaveChat: (link: string) => Promise<boolean>;
+  onCreateChat: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  // «Изменить» относится к конкретной ссылке: как только чат сменился
+  // (бот привязал новый), карточка сама возвращается к кнопке «Открыть»
+  const [editingLink, setEditingLink] = useState<string | null>(null);
+  const editing = !!chat && editingLink === chat.link;
+  const setEditing = (on: boolean) => setEditingLink(on && chat ? chat.link : null);
+  const [manual, setManual] = useState(false);
   const [link, setLink] = useState('');
+  const [canPm, setCanPm] = useState(allowsWriteToPm);
   const usernames = supporters.filter((s) => !s.is_me && s.username).map((s) => `@${s.username}`);
-  const showForm = !chat || editing;
+  const showSetup = !chat || editing;
 
   const save = async (value: string) => {
     if (await onSaveChat(value)) {
       setEditing(false);
+      setManual(false);
       setLink('');
     }
   };
@@ -685,6 +739,12 @@ function PoolTeam({
   const copy = async () => {
     if (await copyText(usernames.join(' '))) toast(`Скопировано: ${usernames.join(' ')}`, 'success');
     else toast('Не получилось скопировать', 'error');
+  };
+
+  const allowPm = async () => {
+    const granted = await requestWriteAccess();
+    setCanPm(granted);
+    toast(granted ? 'Готово — бот пришлёт приглашение, когда появится чат сбора' : 'Без разрешения бот не сможет написать вам', granted ? 'success' : 'info');
   };
 
   return (
@@ -727,7 +787,7 @@ function PoolTeam({
       </div>
 
       <div className="mt-3 border-t border-separator pt-3">
-        {!showForm && chat ? (
+        {!showSetup && chat ? (
           <>
             <button
               onClick={() => openTelegramLink(chat.link)}
@@ -738,15 +798,13 @@ function PoolTeam({
             </button>
             <div className="mt-2 flex items-center justify-between gap-2 text-[13px] text-hint">
               <span className="truncate">
-                {chat.set_by ? `Группу добавил(а) ${chat.set_by.first_name}` : 'Группа участников сбора'}
+                {chat.managed
+                  ? '🔒 Пускает только участников сбора'
+                  : chat.set_by
+                    ? `Чат добавил(а) ${chat.set_by.first_name}`
+                    : 'Чат участников сбора'}
               </span>
-              <button
-                onClick={() => {
-                  setLink(chat.link);
-                  setEditing(true);
-                }}
-                className="shrink-0 text-link"
-              >
+              <button onClick={() => setEditing(true)} className="shrink-0 text-link">
                 Изменить
               </button>
             </div>
@@ -755,52 +813,86 @@ function PoolTeam({
           <>
             <div className="text-[15px] font-semibold">Чат, чтобы договориться о покупке</div>
             <p className="mt-0.5 text-[13px] leading-snug text-hint">
-              Создайте группу в Telegram, добавьте участников и вставьте ссылку-приглашение из настроек группы — её
-              увидят только участники сбора
+              Telegram предложит создать новый чат или выбрать существующий. Бот пришлёт приглашение всем участникам
+              сбора и будет пускать в чат только их
             </p>
-            <form
-              className="mt-2.5 flex gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void save(link);
-              }}
+            <button
+              onClick={onCreateChat}
+              disabled={creating}
+              data-create-pool-chat
+              className="mt-2.5 flex h-11 w-full items-center justify-center gap-2 rounded-[12px] bg-accent text-[15px] font-semibold text-accent-text transition active:scale-[0.98] disabled:opacity-60"
             >
-              <input
-                value={link}
-                onChange={(e) => setLink(e.target.value)}
-                placeholder="t.me/+…"
-                inputMode="url"
-                autoCapitalize="off"
-                autoComplete="off"
-                data-pool-chat-input
-                className="h-11 min-w-0 flex-1 rounded-[12px] bg-fill px-3 text-[16px] outline-none focus:ring-2 focus:ring-accent"
-              />
-              <button
-                type="submit"
-                disabled={busy || !link.trim()}
-                className="flex h-11 shrink-0 items-center rounded-[12px] bg-accent px-4 text-[15px] font-semibold text-accent-text disabled:opacity-50"
-              >
-                {busy ? <Loader2 size={16} className="animate-spin" /> : 'Сохранить'}
-              </button>
-            </form>
+              {creating ? <Loader2 size={18} className="animate-spin" /> : '💬 Создать чат сбора'}
+            </button>
+
+            {manual ? (
+              <>
+                <form
+                  className="mt-3 flex gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void save(link);
+                  }}
+                >
+                  <input
+                    value={link}
+                    onChange={(e) => setLink(e.target.value)}
+                    placeholder="t.me/+…"
+                    inputMode="url"
+                    autoCapitalize="off"
+                    autoComplete="off"
+                    data-pool-chat-input
+                    className="h-11 min-w-0 flex-1 rounded-[12px] bg-fill px-3 text-[16px] outline-none focus:ring-2 focus:ring-accent"
+                  />
+                  <button
+                    type="submit"
+                    disabled={busy || !link.trim()}
+                    className="flex h-11 shrink-0 items-center rounded-[12px] bg-fill px-4 text-[15px] font-semibold text-link disabled:opacity-50"
+                  >
+                    {busy ? <Loader2 size={16} className="animate-spin" /> : 'Сохранить'}
+                  </button>
+                </form>
+                {usernames.length > 0 && (
+                  <button onClick={() => void copy()} className="mt-2 text-[13px] font-semibold text-link">
+                    Скопировать {usernames.length === 1 ? 'username участника' : 'username участников'}
+                  </button>
+                )}
+              </>
+            ) : null}
+
             <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
-              {usernames.length > 0 && (
-                <button onClick={() => void copy()} className="font-semibold text-link">
-                  Скопировать {usernames.length === 1 ? 'username участника' : 'username участников'}
+              {!manual && (
+                <button onClick={() => setManual(true)} className="text-link" data-manual-chat>
+                  Уже есть чат? Вставить ссылку
                 </button>
               )}
               {chat && editing && (
                 <>
                   <button onClick={() => void save('')} className="text-destructive">
-                    Убрать ссылку
+                    Отвязать чат
                   </button>
-                  <button onClick={() => setEditing(false)} className="text-hint">
+                  <button
+                    onClick={() => {
+                      setEditing(false);
+                      setManual(false);
+                    }}
+                    className="text-hint"
+                  >
                     Отмена
                   </button>
                 </>
               )}
             </div>
           </>
+        )}
+
+        {!canPm && (
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-[12px] bg-fill px-3 py-2.5">
+            <span className="text-[13px] leading-snug">🔔 Разрешите боту писать вам — так придёт приглашение в чат</span>
+            <button onClick={() => void allowPm()} className="shrink-0 text-[13px] font-semibold text-link">
+              Разрешить
+            </button>
+          </div>
         )}
       </div>
     </div>

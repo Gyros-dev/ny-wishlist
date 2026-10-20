@@ -18,6 +18,14 @@
 
 create schema if not exists extensions;
 create extension if not exists pgcrypto with schema extensions;
+-- pg_net: из базы настраивается вебхук бота (app.setup_telegram_webhook)
+do $$
+begin
+  create extension if not exists pg_net;
+exception when others then
+  raise notice 'pg_net недоступен — вебхук бота придётся настроить вручную';
+end;
+$$;
 
 create schema if not exists app;
 
@@ -49,6 +57,11 @@ create table if not exists app.settings (
 
 insert into app.settings (key, value)
 values ('init_data_max_age', '86400')
+on conflict (key) do nothing;
+
+-- секрет, которым Telegram подписывает запросы к вебхуку бота
+insert into app.settings (key, value)
+values ('webhook_secret', encode(extensions.gen_random_bytes(24), 'hex'))
 on conflict (key) do nothing;
 
 create table if not exists app.users (
@@ -166,6 +179,23 @@ create table if not exists app.pool_chats (
   foreign key (room_id, recipient_id) references app.room_members (room_id, user_id) on delete cascade
 );
 
+-- чат, который бот создал или к которому привязан: в него он пускает только
+-- участников сбора; null — ссылку вставили вручную
+alter table app.pool_chats add column if not exists chat_id bigint;
+create unique index if not exists pool_chats_chat_id_idx on app.pool_chats (chat_id);
+
+-- «Создать чат сбора»: request_id уходит в кнопку KeyboardButtonRequestChat
+-- и возвращается боту в chat_shared — так бот узнаёт, чей это сбор
+create table if not exists app.pool_chat_requests (
+  request_id integer primary key,
+  room_id uuid not null,
+  recipient_id bigint not null,
+  created_by bigint not null,
+  created_at timestamptz not null default now(),
+  foreign key (room_id, recipient_id) references app.room_members (room_id, user_id) on delete cascade,
+  foreign key (room_id, created_by) references app.room_members (room_id, user_id) on delete cascade
+);
+
 -- Бронь: участник дарит подарок целиком сам, без общего сбора. Кто
 -- забронировал, знает только он сам; владелец вишлиста не видит даже факта
 -- брони. Пропадает вместе с подарком и с выходом участника из компании.
@@ -194,6 +224,7 @@ alter table app.pledges enable row level security;
 alter table app.votes enable row level security;
 alter table app.reservations enable row level security;
 alter table app.pool_chats enable row level security;
+alter table app.pool_chat_requests enable row level security;
 
 -- ---------------------------------------------------------------------------
 -- Проверка Telegram initData
@@ -494,6 +525,8 @@ as $$
     'pool_chat', case when pool.i_support then (
       select jsonb_build_object(
         'link', c.invite_link,
+        -- чат привязан к боту: он пускает только участников сбора
+        'managed', c.chat_id is not null,
         'set_by', (select app.user_json(a) from app.users a where a.id = c.set_by)
       )
       from app.pool_chats c
@@ -1070,7 +1103,7 @@ begin
     insert into app.pool_chats (room_id, recipient_id, invite_link, set_by)
     values (p_room_id, p_friend_id, v_link, v_me)
     on conflict (room_id, recipient_id) do update
-      set invite_link = excluded.invite_link, set_by = excluded.set_by, updated_at = now();
+      set invite_link = excluded.invite_link, set_by = excluded.set_by, chat_id = null, updated_at = now();
   end if;
 
   return app.friend_payload(p_room_id, v_me, p_friend_id);
@@ -1122,6 +1155,169 @@ begin
   end if;
 
   return app.friend_payload(p_room_id, v_me, v_gift.owner_id);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Бот: эти функции вызывает Edge Function telegram-bot напрямую через
+-- SUPABASE_DB_URL. Снаружи (Data API) они недоступны — схема app закрыта.
+-- ---------------------------------------------------------------------------
+
+-- Мини-приложение просит бота подготовить кнопку «Создать чат сбора»
+create or replace function app.bot_prepare_chat(p_init_data text, p_room_id uuid, p_friend_id bigint)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_me bigint := app.auth(p_init_data);
+  v_id integer;
+begin
+  perform app.require_member(p_room_id, v_me);
+  if not exists (
+    select 1 from app.pledges p
+    where p.room_id = p_room_id and p.giver_id = v_me and p.recipient_id = p_friend_id
+  ) then
+    raise exception 'Чат сбора могут создать только те, кто скидывается';
+  end if;
+
+  delete from app.pool_chat_requests r where r.created_at < now() - interval '1 day';
+  loop
+    v_id := 1 + floor(random() * 2147483646)::integer;
+    begin
+      insert into app.pool_chat_requests (request_id, room_id, recipient_id, created_by)
+      values (v_id, p_room_id, p_friend_id, v_me);
+      exit;
+    exception when unique_violation then
+      -- редкое совпадение — берём другой номер
+    end;
+  end loop;
+
+  return jsonb_build_object(
+    'request_id', v_id,
+    'user_id', v_me,
+    'friend_name', (select u.first_name from app.users u where u.id = p_friend_id)
+  );
+end;
+$$;
+
+-- Боту пришёл выбранный чат (chat_shared) или /start в группе: чей это сбор.
+-- null — запрос чужой, устарел или автор больше не в сборе.
+create or replace function app.bot_claim_chat(p_request_id integer, p_from bigint)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_r app.pool_chat_requests;
+begin
+  select r.* into v_r from app.pool_chat_requests r
+  where r.request_id = p_request_id and r.created_at > now() - interval '1 day';
+  if v_r.request_id is null or v_r.created_by <> p_from then
+    return null;
+  end if;
+  if not exists (
+    select 1 from app.pledges p
+    where p.room_id = v_r.room_id and p.giver_id = p_from and p.recipient_id = v_r.recipient_id
+  ) then
+    return null;
+  end if;
+  delete from app.pool_chat_requests r where r.request_id = p_request_id;
+
+  return jsonb_build_object(
+    'room_id', v_r.room_id,
+    'recipient_id', v_r.recipient_id,
+    'room_name', (select r.name from app.rooms r where r.id = v_r.room_id),
+    'friend_name', (select u.first_name from app.users u where u.id = v_r.recipient_id),
+    'creator_name', (select u.first_name from app.users u where u.id = p_from),
+    'supporters', coalesce((
+      select jsonb_agg(p.giver_id order by p.created_at)
+      from app.pledges p
+      where p.room_id = v_r.room_id and p.recipient_id = v_r.recipient_id
+    ), '[]'::jsonb)
+  );
+end;
+$$;
+
+create or replace function app.bot_save_chat(
+  p_room_id uuid,
+  p_recipient_id bigint,
+  p_chat_id bigint,
+  p_link text,
+  p_set_by bigint
+)
+returns void
+language plpgsql
+volatile
+set search_path = ''
+as $$
+begin
+  -- один чат — один сбор
+  update app.pool_chats c set chat_id = null
+   where c.chat_id = p_chat_id and not (c.room_id = p_room_id and c.recipient_id = p_recipient_id);
+  insert into app.pool_chats (room_id, recipient_id, invite_link, set_by, chat_id)
+  values (p_room_id, p_recipient_id, p_link, p_set_by, p_chat_id)
+  on conflict (room_id, recipient_id) do update
+    set invite_link = excluded.invite_link, set_by = excluded.set_by,
+        chat_id = excluded.chat_id, updated_at = now();
+end;
+$$;
+
+-- Пускать ли в чат сбора: только тех, кто сейчас скидывается
+create or replace function app.bot_can_join(p_chat_id bigint, p_user_id bigint)
+returns boolean
+language sql
+stable
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from app.pool_chats c
+    join app.pledges p
+      on p.room_id = c.room_id and p.recipient_id = c.recipient_id and p.giver_id = p_user_id
+    where c.chat_id = p_chat_id
+  );
+$$;
+
+-- Группа превратилась в супергруппу — у неё новый id
+create or replace function app.bot_migrate_chat(p_old_chat_id bigint, p_new_chat_id bigint)
+returns void
+language sql
+volatile
+set search_path = ''
+as $$
+  update app.pool_chats c set chat_id = p_new_chat_id where c.chat_id = p_old_chat_id;
+$$;
+
+-- Один раз после развёртывания Edge Function: направить Telegram на вебхук.
+--   select app.setup_telegram_webhook('https://<ref>.supabase.co/functions/v1/telegram-bot');
+--   select status_code, content::text from net._http_response order by id desc limit 1;
+create or replace function app.setup_telegram_webhook(p_url text)
+returns bigint
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_token text;
+  v_secret text;
+begin
+  select s.value into v_token from app.settings s where s.key = 'bot_token';
+  select s.value into v_secret from app.settings s where s.key = 'webhook_secret';
+  if v_token is null then
+    raise exception 'Сначала сохраните bot_token в app.settings';
+  end if;
+  return net.http_post(
+    url := 'https://api.telegram.org/bot' || v_token || '/setWebhook',
+    body := jsonb_build_object(
+      'url', p_url,
+      'secret_token', v_secret,
+      'allowed_updates', jsonb_build_array('message', 'chat_join_request')
+    ),
+    headers := '{"Content-Type": "application/json"}'::jsonb
+  );
 end;
 $$;
 

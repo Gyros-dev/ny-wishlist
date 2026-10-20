@@ -6,6 +6,9 @@ const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY ?? '';
 
 export const isBackendConfigured = SUPABASE_URL !== '' && SUPABASE_KEY !== '';
 
+// Бот (Edge Function supabase/functions/telegram-bot) — для «Создать чат сбора»
+const BOT_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/telegram-bot`;
+
 export class ApiError extends Error {
   status: number;
   code: string | undefined;
@@ -112,6 +115,28 @@ export const api = {
   setPoolChat: (roomId: string, friendId: number, link: string) =>
     rpc<FriendPayload>('wl_set_pool_chat', { p_room_id: roomId, p_friend_id: friendId, p_link: link }),
 };
+
+/** Бот готовит кнопку для WebApp.requestChat и запасной start_param для ?startgroup= */
+export async function prepareChat(roomId: string, friendId: number) {
+  let res: Response;
+  try {
+    res = await fetch(BOT_FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'prepare_chat', init_data: initData, room_id: roomId, friend_id: friendId }),
+    });
+  } catch {
+    throw new ApiError('Бот не отвечает. Проверьте, что функция telegram-bot развёрнута', 0);
+  }
+  const body = (await res.json().catch(() => ({}))) as { button_id?: string | null; start_param?: string; error?: string };
+  if (!res.ok || !body.start_param) {
+    throw new ApiError(
+      body.error || (res.status === 404 ? 'Бот ещё не подключён: разверните функцию telegram-bot (см. README)' : `Ошибка бота (${res.status})`),
+      res.status,
+    );
+  }
+  return { buttonId: body.button_id ?? null, startParam: body.start_param };
+}
 
 export function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;

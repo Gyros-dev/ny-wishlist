@@ -274,6 +274,22 @@ class Phone {
     setTimeout(() => bubble.classList.add('shown'), 30);
   }
 
+  /** WebApp.requestChat: в Telegram здесь системный выбор чата, эмулятор сразу «создаёт» новый */
+  async simulateRequestChat(buttonId) {
+    this.toast('💬 Telegram: создан чат «Сбор на подарок»');
+    try {
+      const res = await fetch(`${API}/__dev/request-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ button_id: buttonId, title: 'Сбор на подарок' }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      this.post('requested_chat_sent', {});
+    } catch (err) {
+      this.post('requested_chat_failed', { error: String(err) });
+    }
+  }
+
   /** Другой телефон «поделился» ссылкой через t.me/share/url */
   receiveShare(fromPhone, url, text) {
     let startParam = null;
@@ -299,7 +315,7 @@ class Phone {
     const { initData } = await res.json();
     const hash = new URLSearchParams({
       tgWebAppData: initData,
-      tgWebAppVersion: '8.0',
+      tgWebAppVersion: '9.6',
       tgWebAppPlatform: 'ios',
       tgWebAppThemeParams: JSON.stringify(this.theme),
       ...(fullscreen ? { tgWebAppFullscreen: '1' } : {}),
@@ -429,6 +445,12 @@ class Phone {
       }
       case 'web_app_open_link':
         this.toast(`🌐 Откроется ${new URL(data.url).hostname}`);
+        break;
+      case 'web_app_request_chat':
+        void this.simulateRequestChat(data.req_id);
+        break;
+      case 'web_app_request_write_access':
+        this.post('write_access_requested', { status: 'allowed' });
         break;
       case 'web_app_close':
         this.load();

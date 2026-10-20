@@ -14,6 +14,12 @@ export function appLink(startParam?: string): string | null {
   return startParam ? `${base}?startapp=${encodeURIComponent(startParam)}` : base;
 }
 
+/** Добавить бота в группу админом — запасной путь для «Создать чат сбора» */
+export function startGroupLink(startParam: string): string | null {
+  if (!BOT_USERNAME) return null;
+  return `https://t.me/${BOT_USERNAME}?startgroup=${encodeURIComponent(startParam)}&admin=invite_users`;
+}
+
 export function inviteLink(inviteCode: string): string | null {
   return appLink(`r${inviteCode}`);
 }

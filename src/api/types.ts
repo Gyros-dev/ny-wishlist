@@ -89,7 +89,7 @@ export interface FriendPayload {
   /** кто скидывается — только для участников сбора, иначе null */
   supporters: Supporter[] | null;
   /** Telegram-группа участников сбора — только для них */
-  pool_chat: { link: string; set_by: User | null } | null;
+  pool_chat: { link: string; managed: boolean; set_by: User | null } | null;
   /** по возрастанию цены */
   gifts: FriendGift[];
 }

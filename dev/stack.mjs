@@ -3,7 +3,11 @@ import { createServer as createHttpServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
+import { createBot, handleRequest } from '../supabase/functions/telegram-bot/index.ts';
 import { PERSONAS, RpcError, callRpc, createDb, seedDemo, signInitData } from './db.mjs';
+import { createFakeTelegram } from './fake-telegram.mjs';
+
+const BOT_SECRET = 'local-webhook-secret';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -18,10 +22,14 @@ function send(res, status, body) {
   res.end(body === undefined ? '' : JSON.stringify(body));
 }
 
-async function readJson(req) {
+async function readText(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
-  const text = Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readJson(req) {
+  const text = await readText(req);
   return text ? JSON.parse(text) : {};
 }
 
@@ -30,6 +38,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function startApi({ port = 54321, latencyMs = 120, seed = true, log = false } = {}) {
   let db = await createDb();
   if (seed) await seedDemo(db);
+  // бот (Edge Function) против поддельного Telegram
+  let fakeTelegram = createFakeTelegram();
+  const bot = () => createBot({ query: async (text, params) => (await db.query(text, params)).rows, telegram: fakeTelegram.telegram });
 
   const server = createHttpServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
@@ -52,7 +63,25 @@ export async function startApi({ port = 54321, latencyMs = 120, seed = true, log
         }
       }
 
+      if (url.pathname === '/functions/v1/telegram-bot') {
+        const body = req.method === 'POST' ? await readText(req) : undefined;
+        const headers = Object.fromEntries(Object.entries(req.headers).filter(([, v]) => typeof v === 'string'));
+        await sleep(latencyMs);
+        const response = await handleRequest(new Request(url, { method: req.method, headers, body }), { bot: bot(), secret: BOT_SECRET });
+        // CORS функция ставит сама, как в Supabase
+        res.writeHead(response.status, Object.fromEntries(response.headers));
+        return res.end(await response.text());
+      }
+
       // Служебные ручки эмулятора — в Supabase их нет
+      if (url.pathname === '/__dev/request-chat' && req.method === 'POST') {
+        // Так Telegram сообщает боту о чате, созданном по кнопке requestChat
+        const { button_id, title } = await readJson(req);
+        const update = fakeTelegram.chatSharedUpdate(button_id, { title });
+        await bot().handleUpdate(update);
+        return send(res, 200, { ok: true, chat_id: update.message.chat_shared.chat_id });
+      }
+      if (url.pathname === '/__dev/telegram-log') return send(res, 200, fakeTelegram.calls);
       if (url.pathname === '/__dev/personas') return send(res, 200, Object.values(PERSONAS));
       if (url.pathname === '/__dev/init-data') {
         const user = PERSONAS[url.searchParams.get('user')];
@@ -64,6 +93,7 @@ export async function startApi({ port = 54321, latencyMs = 120, seed = true, log
       if (url.pathname === '/__dev/reset' && req.method === 'POST') {
         await db.close();
         db = await createDb();
+        fakeTelegram = createFakeTelegram();
         if (url.searchParams.get('empty') !== '1') await seedDemo(db);
         return send(res, 200, { ok: true });
       }
