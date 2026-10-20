@@ -1,0 +1,940 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: #fff;
+  overflow: hidden;
+  background:
+    radial-gradient(1100px 700px at 78% 18%, rgba(116, 82, 255, 0.35) 0%, rgba(116, 82, 255, 0) 60%),
+    radial-gradient(900px 600px at 10% 90%, rgba(255, 170, 60, 0.16) 0%, rgba(255, 170, 60, 0) 60%),
+    linear-gradient(180deg, #121743 0%, #0a0d26 100%);
+}
+
+/* ---------- снег на фоне ---------- */
+#sky {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+#sky span {
+  position: absolute;
+  top: -12px;
+  border-radius: 50%;
+  background: #fff;
+  animation: fall linear infinite;
+}
+
+@keyframes fall {
+  from {
+    transform: translate3d(0, -20px, 0);
+  }
+  to {
+    transform: translate3d(40px, 110vh, 0);
+  }
+}
+
+/* ---------- сцена ---------- */
+#stage {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 64px;
+}
+
+#panel {
+  display: none;
+  width: 680px;
+  flex-shrink: 0;
+}
+
+body.demo #panel {
+  display: block;
+}
+
+body.demo #stage {
+  justify-content: space-between;
+  padding: 0 110px 0 120px;
+}
+
+#dev-bar {
+  position: fixed;
+  top: 14px;
+  left: 18px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+body.demo #dev-bar {
+  display: none;
+}
+
+#dev-bar button,
+.phone-tools button,
+.phone-tools select {
+  font: inherit;
+  font-size: 13px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.brand-icon {
+  width: 92px;
+  height: 92px;
+  flex-shrink: 0;
+  border-radius: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 52px;
+  background: linear-gradient(135deg, #2b3a8f, #7b3fe4);
+  box-shadow:
+    0 20px 40px -14px rgba(123, 63, 228, 0.8),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.brand-icon.big {
+  width: 120px;
+  height: 120px;
+  font-size: 68px;
+  border-radius: 32px;
+  margin: 0 auto;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 50px;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.brand p {
+  margin: 10px 0 0;
+  font-size: 20px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+#steps {
+  list-style: none;
+  margin: 48px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#steps li {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  padding: 14px 22px;
+  border-radius: 22px;
+  opacity: 0.38;
+  transition:
+    opacity 0.4s,
+    background 0.4s,
+    transform 0.4s;
+}
+
+#steps li .num {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.12);
+  transition: background 0.4s;
+}
+
+#steps li .t {
+  font-size: 25px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+#steps li .d {
+  margin-top: 3px;
+  font-size: 18px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+#steps li.done {
+  opacity: 0.62;
+}
+
+#steps li.done .num {
+  background: #2fb455;
+}
+
+#steps li.active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  transform: translateX(6px);
+}
+
+#steps li.active .num {
+  background: linear-gradient(135deg, #ffcf5c, #f39a2b);
+  color: #3b2600;
+}
+
+#say {
+  margin-top: 28px;
+  min-height: 64px;
+  padding-left: 22px;
+  font-size: 22px;
+  line-height: 1.4;
+  color: #ffd27a;
+  transition: opacity 0.35s;
+}
+
+#say.hidden {
+  opacity: 0;
+}
+
+/* ---------- телефоны ---------- */
+#phones {
+  display: flex;
+  gap: 44px;
+  align-items: flex-start;
+}
+
+.phone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.phone-label {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.phone-label small {
+  font-size: 16px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.phone-label .dot {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.phone-tools {
+  display: flex;
+  gap: 8px;
+}
+
+body.demo .phone-tools {
+  display: none;
+}
+
+.device {
+  width: 414px;
+  height: 868px;
+  padding: 12px;
+  border-radius: 64px;
+  background: linear-gradient(145deg, #34363d, #0c0d10);
+  box-shadow:
+    0 0 0 2px #45474e,
+    0 50px 90px -30px rgba(0, 0, 0, 0.85),
+    inset 0 0 0 2px #000;
+}
+
+.screen {
+  --bg: #efeff4;
+  --header: #efeff4;
+  --bottom: #efeff4;
+  --text: #000;
+  --hint: #8e8e93;
+  --link: #007aff;
+  position: relative;
+  width: 390px;
+  height: 844px;
+  border-radius: 52px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.statusbar {
+  position: relative;
+  height: 50px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 30px 0 46px;
+  font-size: 16px;
+  font-weight: 650;
+  background: var(--header);
+}
+
+.statusbar .icons {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.island {
+  position: absolute;
+  left: 50%;
+  top: 11px;
+  width: 122px;
+  height: 35px;
+  transform: translateX(-50%);
+  border-radius: 20px;
+  background: #000;
+}
+
+.tg-header {
+  position: relative;
+  height: 50px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  background: var(--header);
+}
+
+.tg-left {
+  min-width: 92px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.tg-left svg {
+  display: none;
+}
+
+.tg-left.back svg {
+  display: block;
+}
+
+.tg-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.tg-title b {
+  display: block;
+  font-size: 16px;
+}
+
+.tg-title small {
+  font-size: 12px;
+  color: var(--hint);
+}
+
+.tg-menu {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1.6px solid var(--link);
+  color: var(--link);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -1px;
+}
+
+.viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.viewport iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.splash {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  font-size: 54px;
+  transition: opacity 0.3s;
+  z-index: 2;
+}
+
+.splash.gone {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.bottom-bar {
+  flex-shrink: 0;
+  height: 0;
+  overflow: hidden;
+  background: var(--bottom);
+  transition: height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.bottom-bar.visible {
+  height: 66px;
+}
+
+.main-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(100% - 32px);
+  height: 50px;
+  margin: 8px 16px 0;
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    transform 0.1s,
+    opacity 0.2s;
+}
+
+.main-button:active,
+.main-button.pressed {
+  transform: scale(0.98);
+  opacity: 0.85;
+}
+
+.main-button:disabled {
+  opacity: 0.55;
+}
+
+.main-button.shine::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.35) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: shine 2.4s ease-in-out infinite;
+}
+
+@keyframes shine {
+  60%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.main-button .spinner {
+  display: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid currentColor;
+  border-right-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+
+.main-button.progress .spinner {
+  display: block;
+}
+
+.main-button.progress .label {
+  display: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.home-zone {
+  position: relative;
+  height: 30px;
+  flex-shrink: 0;
+  background: var(--bottom);
+}
+
+.home-zone::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  width: 134px;
+  height: 5px;
+  border-radius: 3px;
+  transform: translateX(-50%);
+  background: var(--text);
+  opacity: 0.85;
+}
+
+/* системный алерт Telegram (showConfirm/showPopup) */
+.popup-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.popup-layer.open {
+  display: flex;
+}
+
+.alert {
+  width: 270px;
+  border-radius: 14px;
+  overflow: hidden;
+  text-align: center;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(20px);
+  color: var(--text);
+}
+
+.alert .body {
+  padding: 18px 16px 16px;
+}
+
+.alert .title {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.alert .message {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.alert .buttons {
+  display: flex;
+  border-top: 0.5px solid var(--separator);
+}
+
+.alert .buttons.stacked {
+  flex-direction: column;
+}
+
+.alert .buttons button {
+  flex: 1;
+  height: 44px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 17px;
+  color: var(--link);
+  cursor: pointer;
+}
+
+.alert .buttons button + button {
+  border-left: 0.5px solid var(--separator);
+}
+
+.alert .buttons.stacked button + button {
+  border-left: 0;
+  border-top: 0.5px solid var(--separator);
+}
+
+.alert .buttons button.destructive {
+  color: #ff3b30;
+}
+
+.alert .buttons button.cancel {
+  font-weight: 600;
+}
+
+.tg-toast {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  z-index: 6;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 14px;
+  color: #fff;
+  background: rgba(28, 28, 30, 0.92);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: all 0.25s;
+  pointer-events: none;
+}
+
+.tg-toast.show {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---------- «палец» для видео ---------- */
+#finger {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 100;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.35),
+    0 0 0 6px rgba(255, 255, 255, 0.12);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 0.5s cubic-bezier(0.3, 0.7, 0.2, 1),
+    opacity 0.3s,
+    scale 0.12s;
+}
+
+#finger.visible {
+  opacity: 1;
+}
+
+#finger.press {
+  scale: 0.78;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.ripple {
+  position: fixed;
+  z-index: 99;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  animation: ripple 0.55s ease-out forwards;
+}
+
+@keyframes ripple {
+  from {
+    transform: scale(0.6);
+    opacity: 1;
+  }
+  to {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+
+/* ---------- финальная карточка ---------- */
+#outro {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 30, 0.82);
+  backdrop-filter: blur(14px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.7s;
+}
+
+#outro.show {
+  opacity: 1;
+}
+
+.outro-card {
+  text-align: center;
+}
+
+.outro-card h2 {
+  margin: 30px 0 0;
+  font-size: 64px;
+  letter-spacing: -0.02em;
+}
+
+.outro-card ul {
+  list-style: none;
+  max-width: 1300px;
+  margin: 36px auto 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 16px;
+}
+
+.outro-card li {
+  padding: 14px 24px;
+  border-radius: 999px;
+  font-size: 22px;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.outro-card li::before {
+  content: '✓ ';
+  color: #4cd964;
+  font-weight: 700;
+}
+
+.outro-card .stack {
+  margin-top: 40px;
+  font-size: 20px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* ---------- переписка в Telegram (до открытия мини-приложения) ---------- */
+.chat-layer {
+  position: absolute;
+  top: 50px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  background: var(--header);
+  transform: translateX(100%);
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.chat-layer.open {
+  transform: none;
+}
+
+.chat-head {
+  height: 52px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 0.5px solid var(--separator);
+}
+
+.chat-back {
+  color: var(--link);
+  display: flex;
+}
+
+.chat-peer {
+  flex: 1;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.chat-peer b {
+  display: block;
+  font-size: 16px;
+}
+
+.chat-peer small {
+  font-size: 12px;
+  color: var(--hint);
+}
+
+.chat-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.chat-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 12px 10px 14px;
+  overflow: hidden;
+  background: linear-gradient(160deg, #d6e9c6 0%, #b6d7ad 55%, #a3cbb3 100%);
+}
+
+.screen.dark-chat .chat-body {
+  background: linear-gradient(160deg, #1b2733 0%, #0e1621 100%);
+}
+
+.bubble {
+  position: relative;
+  max-width: 82%;
+  padding: 7px 12px 18px;
+  border-radius: 18px;
+  font-size: 16px;
+  line-height: 1.3;
+  color: var(--text);
+  opacity: 0;
+  transform: translateY(10px) scale(0.98);
+  transition:
+    opacity 0.3s,
+    transform 0.3s;
+}
+
+.bubble.shown {
+  opacity: 1;
+  transform: none;
+}
+
+.bubble.in {
+  align-self: flex-start;
+  background: var(--card);
+  border-bottom-left-radius: 6px;
+}
+
+.bubble.out {
+  align-self: flex-end;
+  background: #e1fec6;
+  border-bottom-right-radius: 6px;
+}
+
+.screen.dark-chat .bubble.out {
+  background: #2b5278;
+}
+
+.bubble .time {
+  position: absolute;
+  right: 10px;
+  bottom: 4px;
+  font-size: 11px;
+  color: var(--hint);
+}
+
+.bubble.invite {
+  width: 82%;
+}
+
+.bubble .link {
+  margin-top: 4px;
+  color: var(--link);
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bubble .preview {
+  margin-top: 8px;
+  padding: 6px 0 2px 10px;
+  border-left: 3px solid var(--link);
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bubble .preview b {
+  color: var(--link);
+  font-size: 15px;
+}
+
+.bubble .preview span {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.bubble .open-app {
+  margin-top: 8px;
+  height: 38px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--link);
+  background: color-mix(in srgb, var(--link) 14%, transparent);
+  cursor: pointer;
+}
+
+.chat-input {
+  height: 84px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px 0;
+  font-size: 22px;
+  color: var(--hint);
+}
+
+.chat-input .field {
+  flex: 1;
+  height: 36px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  border-radius: 18px;
+  border: 0.5px solid var(--separator);
+  background: var(--card);
+  font-size: 16px;
+}

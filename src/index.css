@@ -1,0 +1,190 @@
+@import 'tailwindcss';
+
+/*
+  Цвета берём из темы Telegram: telegram-web-app.js выставляет
+  --tg-theme-* на <html> и обновляет их при смене темы. Значения после
+  запятой — запасные (светлая тема iOS).
+*/
+:root {
+  --bg: var(--tg-theme-secondary-bg-color, #efeff4);
+  --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #ffffff));
+  --text: var(--tg-theme-text-color, #000000);
+  --hint: var(--tg-theme-hint-color, #8e8e93);
+  --link: var(--tg-theme-link-color, #007aff);
+  --accent: var(--tg-theme-button-color, #007aff);
+  --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  --section-header: var(--tg-theme-section-header-text-color, var(--hint));
+  --destructive: var(--tg-theme-destructive-text-color, #ff3b30);
+  --separator: var(--tg-theme-section-separator-color, rgba(60, 60, 67, 0.18));
+  --fill: color-mix(in srgb, var(--text) 7%, transparent);
+  --success: #2fb455;
+  --gold: #f4b13e;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-text: var(--text);
+  --color-hint: var(--hint);
+  --color-link: var(--link);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-section: var(--section-header);
+  --color-destructive: var(--destructive);
+  --color-separator: var(--separator);
+  --color-fill: var(--fill);
+  --color-success: var(--success);
+  --color-gold: var(--gold);
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', Roboto, sans-serif;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+  /* iOS увеличивает страницу при фокусе на поле с шрифтом меньше 16px */
+  font-size: 16px;
+  min-width: 0;
+}
+
+::-webkit-scrollbar {
+  display: none;
+}
+
+.screen {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  background: var(--bg);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* «Ваша часть» на шкале сбора — штриховка поверх основного цвета */
+.stripes {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.45) 0 5px,
+    rgba(255, 255, 255, 0) 5px 10px
+  );
+  background-size: 14px 14px;
+  animation: stripes-move 0.8s linear infinite;
+}
+
+@keyframes stripes-move {
+  to {
+    background-position: 14px 0;
+  }
+}
+
+/* Праздничная шапка */
+.hero {
+  background:
+    radial-gradient(120% 140% at 100% 0%, rgba(255, 196, 92, 0.35) 0%, rgba(255, 196, 92, 0) 45%),
+    linear-gradient(135deg, #1f2b6c 0%, #3b2a8f 55%, #7b2f9e 100%);
+}
+
+.snowflake {
+  position: absolute;
+  top: -10px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.85);
+  animation-name: snow-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  pointer-events: none;
+}
+
+@keyframes snow-fall {
+  0% {
+    transform: translate3d(0, -10px, 0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(18px, 210px, 0);
+    opacity: 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, var(--fill) 0%, color-mix(in srgb, var(--text) 13%, transparent) 50%, var(--fill) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(4deg);
+  }
+}
+
+.bob {
+  animation: bob 3s ease-in-out infinite;
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-6px);
+  }
+  40%,
+  80% {
+    transform: translateX(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stripes,
+  .snowflake,
+  .shimmer,
+  .bob {
+    animation: none;
+  }
+}
