@@ -51,8 +51,12 @@ export interface Member extends User {
   /** сколько подарков кто-то дарит сам — без имён */
   reserved_count: number;
   my_reserved_count: number;
-  /** до ближайшего подарка из сбора не хватает; null — хватает на всё */
+  /** до ближайшего подарка из сбора не хватает; null — хватает на каждый */
   next_missing: number | null;
+  /** на сколько подарков хватает сразу (самые недорогие вместе) */
+  together_count: number;
+  /** сколько не хватает, чтобы хватило ещё на один; null — хватает на все сразу */
+  together_next_missing: number | null;
   purchase_status: 'buying' | 'bought' | null;
   my_pledge: number | null;
   /** итоговый набор по голосам — что покупаем */
@@ -89,6 +93,15 @@ export interface FriendGift extends Gift {
   /** сколько ещё не хватает с моим взносом и без него */
   missing: number;
   others_missing: number;
+  /**
+   * Сколько не хватает, чтобы купить подарок вместе со всеми, что дешевле
+   * него; null — подарок не в общем сборе. С моим взносом и без него.
+   */
+  together_missing: number | null;
+  together_others_missing: number | null;
+  /** сколько не хватает, чтобы купить подарок в придачу к выбранным по голосам; null — набора нет или подарок уже в нём */
+  extra_missing: number | null;
+  extra_others_missing: number | null;
   /** доля участников сбора, проголосовавших за подарок, % */
   vote_pct: number | null;
   my_vote: boolean;

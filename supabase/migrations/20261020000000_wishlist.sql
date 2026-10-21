@@ -700,6 +700,11 @@ $$;
 --   missing / others_missing — сколько ещё не хватает (с моим взносом и без);
 --   vote_pct   — доля участников сбора, проголосовавших за подарок;
 --   picked     — подарок входит в итоговый набор;
+--   together_missing / together_others_missing — сколько не хватает, чтобы
+--                купить этот подарок вместе со всеми, что дешевле него
+--                (самый большой набор подарков, на который хватает сразу);
+--   extra_missing / extra_others_missing — сколько не хватает, чтобы купить
+--                подарок вместе с итоговым набором (если набор уже есть);
 --   reserved / reserved_by_me — подарок кто-то дарит сам / это я.
 -- Кто именно забронировал подарок и кто за что голосовал, не отдаётся никому.
 create or replace function app.friend_payload(p_room_id uuid, p_me bigint, p_friend bigint)
@@ -727,6 +732,21 @@ as $$
   ),
   picked as (
     select app.picked_gifts(p_room_id, p_friend) as ids
+  ),
+  picked_sum as (
+    select coalesce(sum(g.price), 0) as total, count(*) as n
+    from app.gifts g, picked
+    where g.id = any (picked.ids)
+  ),
+  -- подарки общего сбора от дешёвых к дорогим с нарастающей суммой цен:
+  -- первые N из них — самый большой набор, который можно купить сразу
+  pool_gifts as (
+    select g.id, sum(g.price) over (
+      order by g.price, g.created_at, g.id rows between unbounded preceding and current row
+    ) as cum
+    from app.gifts g
+    where g.room_id = p_room_id and g.owner_id = p_friend and g.received_at is null
+      and not exists (select 1 from app.reservations r where r.gift_id = g.id)
   ),
   purchase as (
     select pp.*, app.user_json(b) as buyer
@@ -781,6 +801,12 @@ as $$
           -- сколько ещё не хватает: со мной и без моего взноса (для предпросмотра)
           'missing', greatest(g.price - pool.total, 0),
           'others_missing', greatest(g.price - (pool.total - pool.mine), 0),
+          'together_missing', case when pg.id is not null then greatest(pg.cum - pool.total, 0) end,
+          'together_others_missing', case when pg.id is not null then greatest(pg.cum - (pool.total - pool.mine), 0) end,
+          'extra_missing', case when pg.id is not null and ps.n > 0 and not (g.id = any (picked.ids))
+            then greatest(ps.total + g.price - pool.total, 0) end,
+          'extra_others_missing', case when pg.id is not null and ps.n > 0 and not (g.id = any (picked.ids))
+            then greatest(ps.total + g.price - (pool.total - pool.mine), 0) end,
           -- доля участников сбора, проголосовавших за подарок
           'vote_pct', case when pool.supporters > 0 and rv.gift_id is null and g.received_at is null
             then round(coalesce(t.n, 0) * 100.0 / pool.supporters)::integer end,
@@ -789,15 +815,16 @@ as $$
           'reserved', rv.gift_id is not null,
           'reserved_by_me', coalesce(rv.reserver_id = p_me, false)
         )
-        order by g.price, g.created_at
+        order by g.price, g.created_at, g.id
       )
       from app.gifts g
       left join tally t on t.gift_id = g.id
       left join app.reservations rv on rv.gift_id = g.id
+      left join pool_gifts pg on pg.id = g.id
       where g.room_id = p_room_id and g.owner_id = p_friend
     ), '[]'::jsonb)
   )
-  from app.users u, pool, picked
+  from app.users u, pool, picked, picked_sum ps
   where u.id = p_friend;
 $$;
 
@@ -866,8 +893,11 @@ begin
           'pool_count', gs.pool_count,
           'reserved_count', gs.reserved_count,
           'my_reserved_count', gs.my_reserved_count,
-          -- до ближайшего подарка из сбора не хватает (null — хватает на всё)
+          -- до ближайшего подарка из сбора не хватает (null — хватает на каждый)
           'next_missing', gs.next_missing,
+          -- на сколько подарков хватает сразу и сколько не хватает ещё на один
+          'together_count', tg.together_count,
+          'together_next_missing', tg.together_next_missing,
           'purchase_status', (
             select pp.status from app.pool_purchases pp
             where pp.room_id = m.room_id and pp.recipient_id = u.id
@@ -904,6 +934,19 @@ begin
         left join app.reservations rv on rv.gift_id = g.id
         where g.room_id = m.room_id and g.owner_id = u.id
       ) gs on true
+      join lateral (
+        select
+          count(*) filter (where c.cum <= pl.total) as together_count,
+          min(c.cum - pl.total) filter (where c.cum > pl.total) as together_next_missing
+        from (
+          select sum(g.price) over (
+            order by g.price, g.created_at, g.id rows between unbounded preceding and current row
+          ) as cum
+          from app.gifts g
+          where g.room_id = m.room_id and g.owner_id = u.id and g.received_at is null
+            and not exists (select 1 from app.reservations rv where rv.gift_id = g.id)
+        ) c
+      ) tg on true
       left join app.pledges mine
         on mine.room_id = m.room_id and mine.recipient_id = u.id and mine.giver_id = v_me
       where m.room_id = v_room.id and u.id <> v_me

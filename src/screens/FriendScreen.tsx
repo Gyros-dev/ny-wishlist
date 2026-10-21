@@ -1,5 +1,5 @@
 import { motion, useIsPresent } from 'framer-motion';
-import { Check, ExternalLink, Loader2, Lock, MessageCircle } from 'lucide-react';
+import { Check, ExternalLink, Loader2, Lock, MessageCircle, Plus } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage, prepareChat } from '../api/client';
 import type { FriendGift, FriendPayload, Member, Supporter } from '../api/types';
@@ -59,12 +59,22 @@ function giftView(gift: FriendGift, draft: number | null) {
       pct: gift.pct,
       funded: gift.funded,
       missing: gift.missing,
+      togetherMissing: gift.together_missing ?? 0,
+      extraMissing: gift.extra_missing,
     };
   }
   const missing = Math.max(0, gift.others_missing - draft);
   const funded = missing === 0;
   const pct = funded ? 100 : Math.min(99, Math.floor(((gift.price - missing) * 100) / gift.price));
-  return { othersPct: gift.others_pct, minePct: (draft * 100) / gift.price, pct, funded, missing };
+  return {
+    othersPct: gift.others_pct,
+    minePct: (draft * 100) / gift.price,
+    pct,
+    funded,
+    missing,
+    togetherMissing: Math.max(0, (gift.together_others_missing ?? 0) - draft),
+    extraMissing: gift.extra_others_missing === null ? null : Math.max(0, gift.extra_others_missing - draft),
+  };
 }
 
 export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onForbidden }: Props) {
@@ -139,11 +149,15 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
   const closed = data?.purchase?.status === 'bought';
   const views = gifts.map((g) => giftView(g, changed ? draft : null));
   const fundedCount = views.filter((v) => v.funded).length;
-  const allFunded = gifts.length > 0 && fundedCount === gifts.length;
-  // ближайший подарок, на который пока не хватает, и сколько нужно вложить мне
-  const nextIndex = views.findIndex((v) => !v.funded);
-  const nextGift = nextIndex >= 0 ? gifts[nextIndex] : null;
-  const nextMissing = nextIndex >= 0 ? views[nextIndex].missing : 0;
+  // Сколько подарков можно купить сразу: самые недорогие, пока хватает денег.
+  // Подарки идут по возрастанию цены, так что это всегда первые N.
+  const togetherCount = views.filter((v) => v.togetherMissing === 0).length;
+  const togetherSet = gifts.slice(0, togetherCount);
+  const allFunded = gifts.length > 0 && togetherCount === gifts.length;
+  // следующий подарок, который можно добавить к набору, и сколько на него нужно вложить мне
+  const nextGift = togetherCount < gifts.length ? gifts[togetherCount] : null;
+  const nextMissing = nextGift ? views[togetherCount].togetherMissing : 0;
+  const nextTopUp = nextGift?.together_others_missing ?? 0;
 
   const onDraft = (value: number) => {
     setDraft(value);
@@ -320,6 +334,17 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
   // итоговый набор считает сервер: по голосам и в пределах общего бюджета
   const picked = gifts.filter((g) => g.picked);
   const pickedText = picked.map((g) => `${g.emoji} ${g.title}`).join(' + ');
+  // подарки, на которые хватит в придачу к выбранным по голосам
+  const extras = closed ? [] : gifts.filter((g, i) => !g.picked && views[i].extraMissing === 0);
+  const extrasText = extras.map((g) => `${g.emoji} ${g.title}`).join(', ');
+  const extrasHint = extras.length > 0 && (
+    <div className="mt-1 text-[14px] leading-snug" data-extras>
+      ✨ Хватит ещё и на: <b>{extrasText}</b>
+      {isSupporter && !closed && (
+        <span className="text-hint"> — проголосуйте, чтобы купить {extras.length > 1 ? 'их' : 'его'} вместе</span>
+      )}
+    </div>
+  );
 
   return (
     <div className="screen" data-screen="friend">
@@ -366,7 +391,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                     {allFunded ? (
                       <div data-all-funded>
                         <div className="text-[22px] leading-tight font-bold text-success">
-                          ✓ Хватает на все подарки
+                          ✓ Хватает на все подарки сразу
                         </div>
                         <div className="mt-1 text-[14px] text-hint">
                           {isSupporter || changed
@@ -377,16 +402,40 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                     ) : (
                       <>
                         <div className="text-[13px] font-medium text-hint">
-                          {changed ? 'С вашим вкладом хватит' : 'Уже хватает'}
+                          {togetherCount === 0
+                            ? changed
+                              ? 'С вашим вкладом'
+                              : 'Пока'
+                            : `${changed ? 'С вашим вкладом хватит' : 'Уже хватает'}${togetherCount > 1 ? ' сразу' : ''}`}
                         </div>
-                        <div className="mt-0.5 text-[26px] leading-tight font-bold">
-                          на <span className="tabular">{fundedCount}</span> из {gifts.length}{' '}
-                          {plural(gifts.length, ['подарка', 'подарков', 'подарков'])}
+                        <div
+                          className={`mt-0.5 leading-tight font-bold ${togetherCount === 0 ? 'text-[22px]' : 'text-[26px]'}`}
+                          data-together={togetherCount}
+                        >
+                          {togetherCount === 0 ? (
+                            'не хватает ни на один подарок'
+                          ) : (
+                            <>
+                              на <span className="tabular">{togetherCount}</span>{' '}
+                              {plural(togetherCount, ['подарок', 'подарка', 'подарков'])} из {gifts.length}
+                            </>
+                          )}
                         </div>
+                        {togetherCount === 1 && fundedCount > 1 ? (
+                          <div className="mt-1 text-[14px] leading-snug" data-together-set>
+                            На любой из {fundedCount} с отметкой ✓ — но только на один
+                          </div>
+                        ) : (
+                          togetherCount > 0 && (
+                            <div className="mt-1 line-clamp-3 text-[14px] leading-snug" data-together-set>
+                              {togetherSet.map((g) => `${g.emoji} ${g.title}`).join(' + ')}
+                            </div>
+                          )
+                        )}
                         {nextGift && (
-                          <div className="mt-1 text-[14px] text-hint" data-next-missing>
-                            До «{nextGift.title}» не хватает{' '}
-                            <b className="tabular text-text">{formatMoney(nextMissing)}</b>
+                          <div className="mt-1 text-[14px] leading-snug text-hint" data-next-missing>
+                            {togetherCount === 0 ? `До «${nextGift.title}»` : `Чтобы хватило ещё и на «${nextGift.title}»,`} не
+                            хватает <b className="tabular text-text">{formatMoney(nextMissing)}</b>
                           </div>
                         )}
                       </>
@@ -441,19 +490,19 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 />
                 <span className="text-[24px] font-bold text-hint">{currencySymbol()}</span>
               </div>
-              {nextGift && gifts[nextIndex].others_missing > 0 && draft !== gifts[nextIndex].others_missing && (
+              {nextGift && nextTopUp > 0 && draft !== nextTopUp && (
                 <button
                   onClick={() => {
                     hapticSelection();
-                    onDraft(gifts[nextIndex].others_missing);
+                    onDraft(nextTopUp);
                   }}
                   data-top-up
                   className="mt-3 flex w-full items-center justify-between gap-2 rounded-[12px] bg-accent/10 px-3 py-2.5 text-left text-[14px] text-accent"
                 >
                   <span className="min-w-0 truncate">
-                    Чтобы хватило на {nextGift.emoji} {nextGift.title}
+                    Чтобы хватило {togetherCount > 0 ? 'ещё и ' : ''}на {nextGift.emoji} {nextGift.title}
                   </span>
-                  <b className="tabular shrink-0">{formatMoney(gifts[nextIndex].others_missing)}</b>
+                  <b className="tabular shrink-0">{formatMoney(nextTopUp)}</b>
                 </button>
               )}
               <div className="mt-3 grid grid-cols-4 gap-2">
@@ -525,11 +574,13 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                 >
                   🎉 <b>Все участники сбора проголосовали</b> —{' '}
                   {picked.length ? <>покупаем {pickedText}</> : 'но на выбранные подарки пока не хватает'}
+                  {extrasHint}
                 </motion.div>
               ) : picked.length > 0 && !closed ? (
                 <div className="mb-3 rounded-[16px] bg-gold/12 px-4 py-3 text-[14px] leading-snug" data-picked-preview>
                   🏆 По голосам сейчас: <b>{pickedText}</b>
-                  {picked.length > 1 ? ' — общего бюджета хватает на всё это' : ''}
+                  {picked.length > 1 ? ' — денег хватает на всё это вместе' : ''}
+                  {extrasHint}
                 </div>
               ) : null}
               {!isSupporter && !closed && gifts.length > 0 && (
@@ -552,6 +603,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
                       view={views[i]}
                       fundedByDraft={changed && views[i].funded && !g.funded}
                       canVote={isSupporter && !closed}
+                      showExtra={!closed}
                       busy={busyId === g.id}
                       disabled={busyId !== null}
                       onVote={() => void vote(g)}
@@ -632,6 +684,7 @@ function GiftCard({
   view,
   fundedByDraft,
   canVote,
+  showExtra,
   busy,
   disabled,
   onVote,
@@ -642,6 +695,7 @@ function GiftCard({
   view: ReturnType<typeof giftView>;
   fundedByDraft: boolean;
   canVote: boolean;
+  showExtra: boolean;
   busy: boolean;
   disabled: boolean;
   onVote: () => void;
@@ -703,8 +757,20 @@ function GiftCard({
       <div className="mt-3">
         <ProgressBar othersPct={view.othersPct} minePct={view.minePct} funded={view.funded} />
       </div>
-      <div className="mt-2 flex items-center justify-between text-[13px]">
-        {view.funded ? (
+      <div className="mt-2 flex items-center justify-between gap-3 text-[13px]">
+        {view.funded && showExtra && !gift.picked && view.extraMissing !== null ? (
+          view.extraMissing === 0 ? (
+            <span className="flex items-center gap-1 font-semibold text-success" data-fits-extra>
+              <Plus size={14} strokeWidth={3} />
+              Хватит и вместе с выбранным
+            </span>
+          ) : (
+            <span className="min-w-0 leading-snug text-hint" data-extra-missing>
+              <span className="font-semibold text-success">✓ Хватает отдельно</span> · вместе с выбранным не хватает{' '}
+              <b className="tabular text-text">{formatMoney(view.extraMissing)}</b>
+            </span>
+          )
+        ) : view.funded ? (
           <span className="flex items-center gap-1 font-semibold text-success">
             <Check size={14} strokeWidth={3} />
             {fundedByDraft ? 'Хватит с вашим вкладом' : 'Хватает'}
@@ -714,7 +780,7 @@ function GiftCard({
             Не хватает <b className="tabular text-text">{formatMoney(view.missing)}</b>
           </span>
         )}
-        <span className="tabular font-semibold text-hint">{view.pct}%</span>
+        <span className="tabular shrink-0 font-semibold text-hint">{view.pct}%</span>
       </div>
 
       {(canVote || votePct > 0) && (

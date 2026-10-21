@@ -545,6 +545,48 @@ describe('комментарий, «очень хочу», «не хватает
   });
 });
 
+describe('на сколько подарков хватает сразу', () => {
+  const poolOf = (res) => res.gifts.filter((g) => !g.reserved && !g.received);
+
+  test('набор от дешёвых к дорогим: сколько не хватает, чтобы купить подарок вместе с более дешёвыми', async () => {
+    const res = await rpc('wl_friend', { p_init_data: as(1004), p_room_id: friends.id, p_friend_id: 1001 });
+    const pool = poolOf(res);
+    const unfunded = pool.find((g) => !g.funded);
+    const total = unfunded.price - unfunded.missing;
+    let cum = 0;
+    for (const g of pool) {
+      cum += g.price;
+      assert.equal(g.together_missing, Math.max(0, cum - total), g.title);
+      assert.equal(g.together_others_missing, Math.max(0, cum - (total - res.my_pledge)), g.title);
+    }
+    const together = pool.filter((g) => g.together_missing === 0).length;
+    const list = await rpc('wl_bootstrap', { p_init_data: as(1003), p_room_id: friends.id });
+    const alice = list.members.find((m) => m.id === 1001);
+    assert.equal(alice.together_count, together);
+    assert.equal(alice.together_next_missing, pool[together].together_missing);
+    assert.ok(alice.funded_count >= alice.together_count, 'по отдельности хватает не меньше, чем сразу');
+  });
+
+  test('что ещё влезет к выбранным по голосам', async () => {
+    const res = await rpc('wl_friend', { p_init_data: as(1004), p_room_id: friends.id, p_friend_id: 1001 });
+    const pool = poolOf(res);
+    const picked = pool.filter((g) => g.picked);
+    const unfunded = pool.find((g) => !g.funded);
+    const total = unfunded.price - unfunded.missing;
+    const pickedSum = picked.reduce((sum, g) => sum + g.price, 0);
+    assert.ok(picked.length > 0 && picked.length < pool.length, 'есть выбранные и невыбранные подарки');
+    for (const g of pool) {
+      if (g.picked || !picked.length) assert.equal(g.extra_missing, null, g.title);
+      else assert.equal(g.extra_missing, Math.max(0, pickedSum + g.price - total), g.title);
+    }
+    // подарки вне сбора в наборы не входят
+    for (const g of res.gifts.filter((x) => x.reserved || x.received)) {
+      assert.equal(g.together_missing, null);
+      assert.equal(g.extra_missing, null);
+    }
+  });
+});
+
 describe('«мне это подарили»', () => {
   test('подаренный подарок выпадает из сбора, голосов и броней', async () => {
     const gifts1 = (await rpc('wl_bootstrap', { p_init_data: as(1002), p_room_id: friends.id })).gifts;

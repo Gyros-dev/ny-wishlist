@@ -248,20 +248,21 @@ function MemberCard({ member: m, onClick }: { member: Member; onClick: () => voi
           <b className="text-success">🎉 Подарок куплен — сбор закрыт</b>
         ) : m.pool_count === 0 ? (
           'Все подарки уже кто-то дарит сам'
-        ) : m.funded_count === m.pool_count ? (
-          <b className="text-success">✓ Хватает на все подарки — можно не скидываться</b>
-        ) : m.next_missing !== null && (m.funded_count > 0 || best > 0) ? (
+        ) : m.together_count === m.pool_count ? (
+          <b className="text-success">✓ Хватает на все подарки сразу — можно не скидываться</b>
+        ) : m.together_next_missing !== null && (m.together_count > 0 || best > 0) ? (
           <>
-            {m.funded_count > 0 && (
+            {m.together_count > 0 && (
               <>
-                Хватает на{' '}
+                Хватает {m.together_count > 1 ? 'сразу ' : ''}на{' '}
                 <b className="text-text">
-                  {m.funded_count} из {m.pool_count}
+                  {m.together_count} из {m.pool_count}
                 </b>
                 .{' '}
               </>
             )}
-            До ближайшего не хватает <b className="tabular text-text">{formatMoney(m.next_missing)}</b>
+            {m.together_count > 0 ? 'Ещё на один' : 'До ближайшего'} не хватает{' '}
+            <b className="tabular text-text">{formatMoney(m.together_next_missing)}</b>
           </>
         ) : (
           'Сбор ещё не начался — будьте первым'
