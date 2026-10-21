@@ -3,7 +3,8 @@
 // Поднимает локальный стенд, открывает эмулятор Telegram с двумя телефонами
 // (Катя зовёт Макса в компанию «Друзья · Новый год», где уже собирают
 // Алисе: подарок по ссылке, «хватает сразу на N», голосование за несколько
-// подарков, покупка и Тайный Санта) и проигрывает сценарий через Playwright. Кадры снимаются CDP-скринкастом и собираются
+// подарков, покупка, Тайный Санта и компании для дней рождения) и
+// проигрывает сценарий через Playwright. Кадры снимаются CDP-скринкастом и собираются
 // ffmpeg в H.264.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -112,6 +113,20 @@ async function tap(locator, after = 450) {
   await wait(after);
 }
 
+/** Выбор в нативном списке: палец «нажимает», значение выставляется само. */
+async function pick(locator, value) {
+  await locator.waitFor({ state: 'visible' });
+  await ensureVisible(locator);
+  const { x, y } = await center(locator);
+  await emu(([x, y]) => window.emu.move(x, y), [x, y]);
+  await wait(520);
+  await emu(() => window.emu.press(true));
+  await wait(120);
+  await locator.selectOption(value);
+  await emu(() => window.emu.press(false));
+  await wait(500);
+}
+
 async function typeText(text, delay = 95) {
   await page.keyboard.type(text, { delay });
 }
@@ -138,7 +153,7 @@ await wait(1600);
 
 // 1. Компания и приглашение
 await step(0);
-await say('У Кати две компании: «Друзья» в донгах и «Работа» в рублях');
+await say('У Кати две компании: новогодние «Друзья» в донгах и «Работа» в рублях — там скидываются на дни рождения');
 await wait(800);
 await tap(katya.app('[data-room-switch]'), 1800);
 await say('Вишлисты компаний не пересекаются. Катя зовёт Макса в «Друзей»');
@@ -258,10 +273,43 @@ await say('Алиса проводит жеребьёвку — бот пише�
 await wait(800);
 await rpc(1001, 'wl_santa', { p_room_id: friendsRoomId, p_action: 'draw', p_budget: null });
 await Promise.all([katya, max].map((p) => p.app('[data-santa-receiver]').waitFor({ timeout: 15000 })));
-await emu(() => window.emu.hideFinger());
-await wait(3600);
+await wait(3400);
 
+// 8. Дни рождения
 await step(7);
+await say('А в компании для дней рождения у каждого свой праздник');
+await tap(katya.app('[data-room-switch]'), 900);
+await tap(katya.app('[data-room="Работа"]'), 600);
+await katya.app('.hero[data-occasion="birthdays"]').waitFor({ timeout: 10000 });
+await wait(1600);
+await say('В шапке — ближайший день рождения, участники идут по дате');
+await tap(katya.app('[data-tab="friends"]'), 2600);
+await say('Бот напомнит всем за две недели, неделю, три дня и накануне — кроме самого именинника');
+await tap(katya.app('[data-friend="Ирина"]'), 2800);
+
+await say('Макс заводит свою компанию — для дней рождения в семье');
+await tap(max.app('[data-room-switch]'), 900);
+await tap(max.app('[data-create-room]'), 900);
+await tap(max.app('[data-occasion="birthdays"][role="radio"]'), 500);
+await tap(max.app('input[name="room-name"]'), 250);
+await typeText('Семья', 90);
+await wait(400);
+await tap(max.main, 300);
+await max.frame.locator('.hero', { hasText: 'Семья' }).waitFor({ timeout: 10000 });
+await wait(900);
+await tap(max.app('[data-tab="mine"]'), 700);
+await say('…и указывает свой день рождения: только день и месяц');
+await tap(max.app('[data-my-birthday]'), 900);
+await pick(max.app('select[name="birthday-day"]'), '14');
+await pick(max.app('select[name="birthday-month"]'), '3');
+await wait(700);
+await tap(max.main, 300);
+await max.app('[data-my-birthday="03-14"]').waitFor({ timeout: 10000 });
+await say('Через неделю после праздника сбор закрывается сам — к следующему году всё с нуля');
+await emu(() => window.emu.hideFinger());
+await wait(4200);
+
+await step(8);
 await say('');
 await emu(() => window.emu.outro(true));
 await wait(5000);

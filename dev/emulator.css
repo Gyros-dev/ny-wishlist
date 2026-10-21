@@ -142,18 +142,18 @@ body.demo #dev-bar {
 
 #steps {
   list-style: none;
-  margin: 48px 0 0;
+  margin: 36px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 #steps li {
   display: flex;
   gap: 20px;
   align-items: flex-start;
-  padding: 14px 22px;
+  padding: 11px 22px;
   border-radius: 22px;
   opacity: 0.38;
   transition:
@@ -210,7 +210,7 @@ body.demo #dev-bar {
 }
 
 #say {
-  margin-top: 28px;
+  margin-top: 22px;
   min-height: 64px;
   padding-left: 22px;
   font-size: 22px;
