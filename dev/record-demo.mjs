@@ -112,34 +112,8 @@ async function tap(locator, after = 450) {
   await wait(after);
 }
 
-/** Тап по кнопке, открывающей выбор файла, и подстановка картинки. */
-async function attachPhoto(p, file) {
-  const chooser = page.waitForEvent('filechooser', { timeout: 4000 }).catch(() => null);
-  await tap(p.app('[data-add-photo]'), 0);
-  const fc = await chooser;
-  if (fc) await fc.setFiles(file);
-  else await p.app('[data-photo-input]').setInputFiles(file);
-  await p.app('[data-photo-preview]').waitFor({ timeout: 8000 });
-}
-
 async function typeText(text, delay = 95) {
   await page.keyboard.type(text, { delay });
-}
-
-/** Свайп пальцем по телефону с плавной прокруткой содержимого. */
-async function swipe(p, id, dy, screen = 'friend') {
-  const device = page.locator(`#phone-${id} .viewport`);
-  const box = await device.boundingBox();
-  const x = box.x + box.width * 0.62;
-  const y0 = box.y + box.height * 0.72;
-  await emu(([x, y]) => window.emu.move(x, y), [x, y0]);
-  await wait(520);
-  await emu(() => window.emu.press(true));
-  await emu(([x, y]) => window.emu.move(x, y), [x, y0 - Math.min(260, Math.abs(dy) * 0.7) * Math.sign(dy)]);
-  await p.scrollBy(dy, screen);
-  await wait(520);
-  await emu(() => window.emu.press(false));
-  await wait(350);
 }
 
 const max = phone(1005);

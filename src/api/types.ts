@@ -6,11 +6,20 @@ export interface User {
   photo_url: string | null;
 }
 
+/** new_year — общий Новый год с Тайным Сантой; birthdays — у каждого свой день рождения */
+export type Occasion = 'new_year' | 'birthdays';
+
+/** Человек с датой рождения: 'MM-DD' или null, если не указана */
+export interface Person extends User {
+  birthday?: string | null;
+}
+
 export interface Room {
   id: string;
   name: string;
   /** ISO 4217 */
   currency: string;
+  occasion: Occasion;
   invite_code: string;
   is_owner: boolean;
   member_count: number;
@@ -40,7 +49,7 @@ export interface Gift {
 }
 
 /** Участник компании глазами другого участника — без сумм и числа скинувшихся */
-export interface Member extends User {
+export interface Member extends Person {
   gift_count: number;
   min_price: number | null;
   /** сколько собрано на каждый подарок общего сбора, % по возрастанию цены */
@@ -64,7 +73,7 @@ export interface Member extends User {
 }
 
 export interface Bootstrap {
-  me: User;
+  me: Person;
   rooms: Room[];
   /** открытая компания; null — компаний пока нет */
   room: Room | null;
@@ -117,7 +126,7 @@ export interface Supporter extends User {
 }
 
 export interface FriendPayload {
-  friend: User;
+  friend: Person;
   my_pledge: number | null;
   /** все участники сбора проголосовали — покупаем подарки с picked */
   decided: boolean;

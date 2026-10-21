@@ -204,3 +204,10 @@ textarea {
     animation: none;
   }
 }
+
+/* Шапка компании дней рождения: тёплая, с конфетти вместо снега */
+.hero.hero-bday {
+  background:
+    radial-gradient(120% 140% at 100% 0%, rgba(255, 214, 102, 0.4) 0%, rgba(255, 214, 102, 0) 45%),
+    linear-gradient(135deg, #8e2a6b 0%, #c8406f 50%, #ee7a45 100%);
+}

@@ -273,6 +273,28 @@ create table if not exists app.reservations (
 
 create index if not exists reservations_reserver_idx on app.reservations (room_id, reserver_id);
 
+-- День рождения: только день и месяц, год не нужен. Один на все компании.
+alter table app.users add column if not exists birthday_month smallint;
+alter table app.users add column if not exists birthday_day smallint;
+alter table app.users drop constraint if exists users_birthday_check;
+alter table app.users add constraint users_birthday_check check (
+  (birthday_month is null) = (birthday_day is null)
+  and (birthday_month is null or (
+    birthday_month between 1 and 12
+    and birthday_day between 1 and case
+      when birthday_month = 2 then 29
+      when birthday_month in (4, 6, 9, 11) then 30
+      else 31
+    end
+  ))
+);
+
+-- Повод компании: new_year — общий Новый год с Тайным Сантой; birthdays —
+-- у каждого свой день рождения, сбор закрывается через неделю после него.
+alter table app.rooms add column if not exists occasion text not null default 'new_year';
+alter table app.rooms drop constraint if exists rooms_occasion_check;
+alter table app.rooms add constraint rooms_occasion_check check (occasion in ('new_year', 'birthdays'));
+
 alter table app.settings enable row level security;
 alter table app.users enable row level security;
 alter table app.rooms enable row level security;
@@ -546,6 +568,73 @@ as $$
   end;
 $$;
 
+-- Сегодняшняя дата в часовом поясе напоминаний
+create or replace function app.local_today()
+returns date
+language sql
+stable
+set search_path = ''
+as $$
+  select (now() at time zone coalesce(
+    (select s.value from app.settings s where s.key = 'reminder_timezone'), 'UTC'
+  ))::date;
+$$;
+
+-- День рождения в заданном году; 29 февраля в невисокосный год — 28-го
+create or replace function app.birthday_in(p_month integer, p_day integer, p_year integer)
+returns date
+language sql
+immutable
+set search_path = ''
+as $$
+  select make_date(p_year, p_month, least(
+    p_day,
+    extract(day from make_date(p_year, p_month, 1) + interval '1 month' - interval '1 day')::integer
+  ));
+$$;
+
+-- Ближайший день рождения, считая сегодняшний; null — дата не указана
+create or replace function app.next_birthday(p_month integer, p_day integer, p_today date)
+returns date
+language sql
+immutable
+set search_path = ''
+as $$
+  select case
+    when p_month is null then null
+    when app.birthday_in(p_month, p_day, extract(year from p_today)::integer) >= p_today
+      then app.birthday_in(p_month, p_day, extract(year from p_today)::integer)
+    else app.birthday_in(p_month, p_day, extract(year from p_today)::integer + 1)
+  end;
+$$;
+
+-- Последний прошедший день рождения, считая сегодняшний
+create or replace function app.last_birthday(p_month integer, p_day integer, p_today date)
+returns date
+language sql
+immutable
+set search_path = ''
+as $$
+  select case
+    when p_month is null then null
+    when app.birthday_in(p_month, p_day, extract(year from p_today)::integer) <= p_today
+      then app.birthday_in(p_month, p_day, extract(year from p_today)::integer)
+    else app.birthday_in(p_month, p_day, extract(year from p_today)::integer - 1)
+  end;
+$$;
+
+-- 'MM-DD' для клиента: дни до праздника он считает сам, по своему часовому поясу
+create or replace function app.birthday_text(p_user app.users)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select case when p_user.birthday_month is not null
+    then lpad(p_user.birthday_month::text, 2, '0') || '-' || lpad(p_user.birthday_day::text, 2, '0')
+  end;
+$$;
+
 -- Сообщение от бота в личку. Пишется в журнал и, если есть pg_net и токен,
 -- уходит в Telegram после коммита. Ошибки не ломают основное действие.
 create or replace function app.notify(p_user_id bigint, p_text text)
@@ -657,6 +746,7 @@ as $$
     'id', p_room.id,
     'name', p_room.name,
     'currency', p_room.currency,
+    'occasion', p_room.occasion,
     'invite_code', p_room.invite_code,
     'is_owner', coalesce(p_room.owner_id = p_me, false),
     'member_count', (select count(*) from app.room_members m where m.room_id = p_room.id)
@@ -755,7 +845,7 @@ as $$
     where pp.room_id = p_room_id and pp.recipient_id = p_friend
   )
   select jsonb_build_object(
-    'friend', app.user_json(u),
+    'friend', app.user_json(u) || jsonb_build_object('birthday', app.birthday_text(u)),
     'my_pledge', (
       select p.amount from app.pledges p
       where p.room_id = p_room_id and p.recipient_id = p_friend and p.giver_id = p_me
@@ -865,7 +955,7 @@ begin
   end if;
 
   return jsonb_build_object(
-    'me', (select app.user_json(u) from app.users u where u.id = v_me),
+    'me', (select app.user_json(u) || jsonb_build_object('birthday', app.birthday_text(u)) from app.users u where u.id = v_me),
     'rooms', coalesce((
       select jsonb_agg(app.room_json(r, v_me) order by m.joined_at)
       from app.room_members m
@@ -882,10 +972,12 @@ begin
     'has_supporters', exists (
       select 1 from app.pledges p where p.room_id = v_room.id and p.recipient_id = v_me
     ),
-    'santa', case when v_room.id is not null then app.santa_json(v_room.id, v_me) end,
+    -- Тайный Санта — только в новогодних компаниях
+    'santa', case when v_room.occasion = 'new_year' then app.santa_json(v_room.id, v_me) end,
     'members', coalesce((
       select jsonb_agg(
         app.user_json(u) || jsonb_build_object(
+          'birthday', app.birthday_text(u),
           'gift_count', gs.gift_count,
           'min_price', gs.min_price,
           'progress', coalesce(gs.progress, '[]'::jsonb),
@@ -955,7 +1047,7 @@ begin
 end;
 $$;
 
-create or replace function public.wl_create_room(p_init_data text, p_name text, p_currency text)
+create or replace function public.wl_create_room(p_init_data text, p_name text, p_currency text, p_occasion text default 'new_year')
 returns jsonb
 language plpgsql
 volatile
@@ -977,18 +1069,76 @@ begin
   if v_currency !~ '^[A-Z]{3}$' then
     raise exception 'Выберите валюту';
   end if;
+  if coalesce(p_occasion, 'new_year') not in ('new_year', 'birthdays') then
+    raise exception 'Выберите повод';
+  end if;
   if (select count(*) from app.room_members m where m.user_id = v_me) >= 30 then
     raise exception 'Можно состоять максимум в 30 компаниях';
   end if;
 
-  insert into app.rooms (name, currency, invite_code, owner_id)
-  values (v_name, v_currency, encode(extensions.gen_random_bytes(8), 'hex'), v_me)
+  insert into app.rooms (name, currency, invite_code, owner_id, occasion)
+  values (v_name, v_currency, encode(extensions.gen_random_bytes(8), 'hex'), v_me, coalesce(p_occasion, 'new_year'))
   returning * into v_room;
 
   insert into app.room_members (room_id, user_id) values (v_room.id, v_me);
   update app.users u set last_room_id = v_room.id where u.id = v_me;
 
   return app.room_json(v_room, v_me);
+end;
+$$;
+
+-- Создатель компании меняет повод. Тайный Санта при этом не удаляется — в
+-- компании дней рождения он просто скрыт и вернётся, если повод сменить обратно.
+create or replace function public.wl_set_room_occasion(p_init_data text, p_room_id uuid, p_occasion text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_me bigint := app.auth(p_init_data);
+  v_room app.rooms;
+begin
+  perform app.require_member(p_room_id, v_me);
+  if p_occasion is null or p_occasion not in ('new_year', 'birthdays') then
+    raise exception 'Выберите повод';
+  end if;
+  update app.rooms r set occasion = p_occasion
+   where r.id = p_room_id and r.owner_id = v_me
+  returning * into v_room;
+  if v_room.id is null then
+    raise exception 'Повод меняет создатель компании';
+  end if;
+  return app.room_json(v_room, v_me);
+end;
+$$;
+
+-- Свой день рождения: день и месяц; null — убрать
+create or replace function public.wl_set_birthday(p_init_data text, p_month integer, p_day integer)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_me bigint := app.auth(p_init_data);
+  v_user app.users;
+begin
+  if (p_month is null) <> (p_day is null) then
+    raise exception 'Укажите и день, и месяц';
+  end if;
+  if p_month is not null and (
+    p_month not between 1 and 12
+    or p_day not between 1 and case when p_month = 2 then 29 when p_month in (4, 6, 9, 11) then 30 else 31 end
+  ) then
+    raise exception 'Такой даты нет';
+  end if;
+  update app.users u set birthday_month = p_month, birthday_day = p_day
+   where u.id = v_me
+  returning * into v_user;
+  return app.user_json(v_user) || jsonb_build_object('birthday', app.birthday_text(v_user));
 end;
 $$;
 
@@ -1549,6 +1699,9 @@ begin
   select ro.* into v_room from app.rooms ro where ro.id = p_room_id;
   select sa.* into v_santa from app.santa sa where sa.room_id = p_room_id;
 
+  if v_room.occasion <> 'new_year' then
+    raise exception 'Тайный Санта — для новогодних компаний';
+  end if;
   if p_action in ('open', 'draw', 'cancel') and v_room.owner_id is distinct from v_me then
     raise exception 'Тайного Санту запускает создатель компании';
   end if;
@@ -1713,9 +1866,160 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- Напоминания перед Новым годом: за 14, 7, 3 и 1 день — пустым вишлистам и
--- незакрытым сборам. Запускается ежедневно через pg_cron (ниже).
+-- Напоминания: перед Новым годом и перед днями рождения — за 14, 7, 3 и
+-- 1 день. Плюс закрытие прошедших сборов на дни рождения. Запускается
+-- ежедневно через pg_cron (ниже).
 -- ---------------------------------------------------------------------------
+
+-- Через неделю после дня рождения сбор закрывается, чтобы к следующему году
+-- он начался с нуля: купленное сбором и забронированное отмечается
+-- подаренным, взносы, голоса, покупка и чат сбора удаляются. Если покупку
+-- ещё делают, ждём до 30 дней. Трогаем только то, что появилось до дня
+-- рождения, — сбор к следующему празднику остаётся.
+create or replace function app.close_birthday_pools(p_today date)
+returns integer
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_closed integer := 0;
+  v_cutoff timestamptz;
+  v_given uuid[];
+  v_reserved uuid[];
+  v_did boolean;
+  r record;
+begin
+  for r in
+    select m.room_id, ro.name as room_name, u.id as user_id,
+           app.last_birthday(u.birthday_month, u.birthday_day, p_today) as bday,
+           pp.status, pp.gift_ids
+    from app.room_members m
+    join app.rooms ro on ro.id = m.room_id and ro.occasion = 'birthdays'
+    join app.users u on u.id = m.user_id and u.birthday_month is not null
+    left join app.pool_purchases pp on pp.room_id = m.room_id and pp.recipient_id = m.user_id
+  loop
+    continue when p_today - r.bday < 7 or (r.status = 'buying' and p_today - r.bday < 30);
+    v_cutoff := (r.bday + 1)::timestamptz;
+    v_given := '{}';
+    v_did := false;
+
+    -- сбор, начатый до дня рождения, — закрываем целиком
+    if exists (
+      select 1 from app.pledges p
+      where p.room_id = r.room_id and p.recipient_id = r.user_id and p.created_at < v_cutoff
+    ) then
+      if r.status = 'bought' then
+        v_given := r.gift_ids;
+      end if;
+      delete from app.pool_purchases pp where pp.room_id = r.room_id and pp.recipient_id = r.user_id;
+      delete from app.votes v where v.room_id = r.room_id and v.recipient_id = r.user_id;
+      delete from app.pledges p where p.room_id = r.room_id and p.recipient_id = r.user_id;
+      delete from app.pool_chats c where c.room_id = r.room_id and c.recipient_id = r.user_id;
+      delete from app.pool_chat_requests c where c.room_id = r.room_id and c.recipient_id = r.user_id;
+      v_did := true;
+    end if;
+
+    -- брони к прошедшему дню рождения — подарки уже подарены
+    with gone as (
+      delete from app.reservations rv
+      where rv.room_id = r.room_id and rv.owner_id = r.user_id and rv.created_at < v_cutoff
+      returning rv.gift_id
+    )
+    select coalesce(array_agg(gone.gift_id), '{}') into v_reserved from gone;
+    if cardinality(v_reserved) > 0 then
+      v_given := v_given || v_reserved;
+      v_did := true;
+    end if;
+
+    if cardinality(v_given) > 0 then
+      update app.gifts g set received_at = coalesce(g.received_at, now())
+       where g.id = any (v_given) and g.owner_id = r.user_id;
+      perform app.notify(r.user_id, format(
+        '🎂 Надеемся, день рождения удался! В «%s» отметили подаренным: %s. Если что-то не так — верните подарок в вишлист',
+        r.room_name, app.gift_titles(v_given)
+      ));
+    end if;
+    if v_did then
+      v_closed := v_closed + 1;
+    end if;
+  end loop;
+  return v_closed;
+end;
+$$;
+
+-- Напоминания перед днями рождения: всем в компании, кроме именинника, — за
+-- 14, 7, 3 и 1 день; имениннику с пустым вишлистом — за 14 и 7 дней; в сам
+-- день рождения — поздравление.
+create or replace function app.birthday_reminders(p_today date)
+returns integer
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_sent integer := 0;
+  r record;
+  o record;
+begin
+  for r in
+    select m.room_id, ro.name as room_name, u.id as user_id, u.first_name,
+           app.next_birthday(u.birthday_month, u.birthday_day, p_today) - p_today as days
+    from app.room_members m
+    join app.rooms ro on ro.id = m.room_id and ro.occasion = 'birthdays'
+    join app.users u on u.id = m.user_id and u.birthday_month is not null
+    where app.next_birthday(u.birthday_month, u.birthday_day, p_today) - p_today in (14, 7, 3, 1)
+  loop
+    -- остальным в компании, если подарок ещё не куплен: кто в сборе —
+    -- договориться о покупке, остальным — заглянуть в вишлист
+    for o in
+      select om.user_id, exists (
+        select 1 from app.pledges p
+        where p.room_id = r.room_id and p.recipient_id = r.user_id and p.giver_id = om.user_id
+      ) as supports
+      from app.room_members om
+      where om.room_id = r.room_id and om.user_id <> r.user_id
+        and not exists (
+          select 1 from app.pool_purchases pp
+          where pp.room_id = r.room_id and pp.recipient_id = r.user_id and pp.status = 'bought'
+        )
+    loop
+      perform app.notify(o.user_id, format(
+        case when o.supports
+          then '🎂 Через %s день рождения: %s («%s»). Сбор ещё не закрыт — договоритесь, кто покупает'
+          else '🎂 Через %s день рождения: %s («%s»). Загляните в вишлист — можно скинуться вместе с остальными'
+        end,
+        app.days_text(r.days), r.first_name, r.room_name
+      ));
+      v_sent := v_sent + 1;
+    end loop;
+
+    if r.days in (14, 7) and not exists (
+      select 1 from app.gifts g
+      where g.room_id = r.room_id and g.owner_id = r.user_id and g.received_at is null
+    ) then
+      perform app.notify(r.user_id, format(
+        '🎂 Через %s ваш день рождения, а вишлист в «%s» пока пустой. Добавьте пару желаний — друзьям будет из чего выбрать',
+        app.days_text(r.days), r.room_name
+      ));
+      v_sent := v_sent + 1;
+    end if;
+  end loop;
+
+  -- поздравление — один раз, даже если человек в нескольких компаниях
+  for r in
+    select distinct u.id, u.first_name
+    from app.room_members m
+    join app.rooms ro on ro.id = m.room_id and ro.occasion = 'birthdays'
+    join app.users u on u.id = m.user_id and u.birthday_month is not null
+    where app.next_birthday(u.birthday_month, u.birthday_day, p_today) = p_today
+  loop
+    perform app.notify(r.id, format('🎉 С днём рождения, %s! Пусть сбудется всё из вишлиста 🎁', r.first_name));
+    v_sent := v_sent + 1;
+  end loop;
+  return v_sent;
+end;
+$$;
 
 create or replace function app.daily_reminders(p_today date default null)
 returns integer
@@ -1732,16 +2036,20 @@ declare
 begin
   select coalesce((select s.value from app.settings s where s.key = 'reminder_timezone'), 'UTC') into v_tz;
   v_today := coalesce(p_today, (now() at time zone v_tz)::date);
+
+  perform app.close_birthday_pools(v_today);
+  v_sent := app.birthday_reminders(v_today);
+
   v_days := make_date(extract(year from v_today)::integer + 1, 1, 1) - v_today;
   if v_days not in (14, 7, 3, 1) then
-    return 0;
+    return v_sent;
   end if;
 
-  -- пустой вишлист в компании, где есть ещё кто-то
+  -- пустой вишлист в новогодней компании, где есть ещё кто-то
   for r in
     select m.user_id, ro.name
     from app.room_members m
-    join app.rooms ro on ro.id = m.room_id
+    join app.rooms ro on ro.id = m.room_id and ro.occasion = 'new_year'
     where not exists (
       select 1 from app.gifts g
       where g.room_id = m.room_id and g.owner_id = m.user_id and g.received_at is null
@@ -1760,7 +2068,7 @@ begin
     select p.giver_id, u.first_name, ro.name
     from app.pledges p
     join app.users u on u.id = p.recipient_id
-    join app.rooms ro on ro.id = p.room_id
+    join app.rooms ro on ro.id = p.room_id and ro.occasion = 'new_year'
     where not exists (
       select 1 from app.pool_purchases pp
       where pp.room_id = p.room_id and pp.recipient_id = p.recipient_id and pp.status = 'bought'

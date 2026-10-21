@@ -2,9 +2,10 @@ import { useIsPresent } from 'framer-motion';
 import { Check, Copy, LogOut, Plus, Share2 } from 'lucide-react';
 import { useState } from 'react';
 import { api, errorMessage } from '../api/client';
-import type { Bootstrap, Room, RoomPreview, User } from '../api/types';
+import type { Bootstrap, Occasion, Room, RoomPreview, User } from '../api/types';
 import { AvatarStack } from '../components/Avatar';
 import { Hero } from '../components/Hero';
+import { Segmented } from '../components/Segmented';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { Layer, useMainButton } from '../telegram/buttons';
@@ -12,6 +13,13 @@ import { hapticNotification, hapticSelection } from '../telegram/webapp';
 import { CURRENCIES, currencyInfo, currencySymbolOf, guessCurrency } from '../utils/currencies';
 import { pluralize } from '../utils/format';
 import { copyText, inviteLink } from '../utils/share';
+
+const OCCASIONS: { value: Occasion; emoji: string; title: string; text: string }[] = [
+  { value: 'new_year', emoji: '🎄', title: 'Новый год', text: 'Общий праздник и Тайный Санта' },
+  { value: 'birthdays', emoji: '🎂', title: 'Дни рождения', text: 'У каждого свой день — бот напомнит заранее' },
+];
+
+const occasionLabel = (occasion: Occasion) => (occasion === 'birthdays' ? '🎂 дни рождения' : '🎄 Новый год');
 
 const STEPS = [
   ['👥', 'Создайте компанию', 'Семья, друзья, коллеги — у каждой компании свои вишлисты и своя валюта'],
@@ -67,11 +75,14 @@ export function JoinScreen({
   return (
     <div className="screen flex flex-col" data-screen="join">
       <div className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-        <div className="bob text-[68px]">🎄</div>
+        <div className="bob text-[68px]">{preview.occasion === 'birthdays' ? '🎂' : '🎄'}</div>
         <div className="mt-4 text-[15px] text-hint">Вас пригласили в компанию</div>
         <h1 className="mt-1 text-[28px] leading-tight font-bold">{preview.name}</h1>
         {preview.owner && (
-          <p className="mt-2 text-[15px] text-hint">{preview.owner.first_name} собирает вишлисты на Новый год</p>
+          <p className="mt-2 text-[15px] text-hint">
+            {preview.owner.first_name} собирает вишлисты на{' '}
+            {preview.occasion === 'birthdays' ? 'дни рождения' : 'Новый год'}
+          </p>
         )}
 
         <div className="mt-6 w-full rounded-[18px] bg-card p-4 text-left">
@@ -88,6 +99,12 @@ export function JoinScreen({
                 Цены и взносы — в валюте «{currency.name}»
               </span>
             </div>
+            {preview.occasion === 'birthdays' && (
+              <div className="flex gap-2">
+                <span className="w-5 shrink-0 text-center">🎂</span>
+                <span>У каждого свой день рождения — укажите дату, и бот напомнит друзьям заранее</span>
+              </div>
+            )}
             <div className="flex gap-2">
               <span className="w-5 shrink-0 text-center">🔒</span>
               <span>Вишлисты видят только участники. Кто сколько скинул — не видит никто</span>
@@ -124,6 +141,7 @@ export function CreateRoomSheet({
 function CreateRoomForm({ onCreated }: { onCreated: (room: Room) => void }) {
   const isPresent = useIsPresent();
   const [name, setName] = useState('');
+  const [occasion, setOccasion] = useState<Occasion>('new_year');
   const [currency, setCurrency] = useState(guessCurrency);
   const [saving, setSaving] = useState(false);
 
@@ -135,7 +153,7 @@ function CreateRoomForm({ onCreated }: { onCreated: (room: Room) => void }) {
     }
     setSaving(true);
     try {
-      const room = await api.createRoom(name, currency);
+      const room = await api.createRoom(name, currency, occasion);
       hapticNotification('success');
       onCreated(room);
     } catch (err) {
@@ -155,6 +173,32 @@ function CreateRoomForm({ onCreated }: { onCreated: (room: Room) => void }) {
         void create();
       }}
     >
+      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Повод">
+        {OCCASIONS.map((o) => {
+          const active = o.value === occasion;
+          return (
+            <button
+              type="button"
+              key={o.value}
+              role="radio"
+              aria-checked={active}
+              data-occasion={o.value}
+              onClick={() => {
+                hapticSelection();
+                setOccasion(o.value);
+              }}
+              className={`flex flex-col items-start rounded-[16px] p-3 text-left transition ${
+                active ? 'bg-accent/12 ring-2 ring-accent' : 'bg-card'
+              }`}
+            >
+              <span className="text-[28px] leading-none">{o.emoji}</span>
+              <span className="mt-2 text-[16px] font-semibold">{o.title}</span>
+              <span className="mt-0.5 text-[12px] leading-snug text-hint">{o.text}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="overflow-hidden rounded-[14px] bg-card">
         <label className="block px-4 pt-2.5 pb-1">
           <span className="text-[12px] font-medium text-hint">Название</span>
@@ -162,7 +206,7 @@ function CreateRoomForm({ onCreated }: { onCreated: (room: Room) => void }) {
             name="room-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Например, Друзья · Новый год"
+            placeholder={occasion === 'birthdays' ? 'Например, Коллеги · дни рождения' : 'Например, Друзья · Новый год'}
             maxLength={60}
             autoComplete="off"
             className="block w-full bg-transparent pb-1.5 text-[17px] outline-none placeholder:text-hint/70"
@@ -218,6 +262,7 @@ interface RoomsSheetProps {
   onInvite: () => void;
   onCreate: () => void;
   onLeave: () => void;
+  onOccasion: (occasion: Occasion) => void;
 }
 
 export function RoomsSheet(props: RoomsSheetProps) {
@@ -228,7 +273,7 @@ export function RoomsSheet(props: RoomsSheetProps) {
   );
 }
 
-function RoomsContent({ boot, onSwitch, onInvite, onCreate, onLeave }: RoomsSheetProps) {
+function RoomsContent({ boot, onSwitch, onInvite, onCreate, onLeave, onOccasion }: RoomsSheetProps) {
   const isPresent = useIsPresent();
   // шторка без своей кнопки внизу — прячем кнопку экрана под ней
   useMainButton(Layer.sheet, null, isPresent);
@@ -254,10 +299,19 @@ function RoomsContent({ boot, onSwitch, onInvite, onCreate, onLeave }: RoomsShee
             <div className="mt-0.5 text-[14px] text-hint">
               {pluralize(room.member_count, ['участник', 'участника', 'участников'])} · {currencySymbolOf(room.currency)}{' '}
               {room.currency}
-              {room.is_owner ? ' · вы создали' : ''}
+              {room.is_owner ? ' · вы создали' : ` · ${occasionLabel(room.occasion)}`}
             </div>
           </div>
         </div>
+        {room.is_owner && (
+          <div className="mt-3" data-room-occasion>
+            <Segmented<Occasion>
+              value={room.occasion}
+              onChange={onOccasion}
+              options={OCCASIONS.map((o) => ({ value: o.value, label: `${o.emoji} ${o.title}` }))}
+            />
+          </div>
+        )}
         {link ? (
           <>
             <div className="mt-3 grid grid-cols-2 gap-2">
@@ -300,7 +354,7 @@ function RoomsContent({ boot, onSwitch, onInvite, onCreate, onLeave }: RoomsShee
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[16px] font-medium">{r.name}</span>
                 <span className="text-[13px] text-hint">
-                  {pluralize(r.member_count, ['участник', 'участника', 'участников'])}
+                  {pluralize(r.member_count, ['участник', 'участника', 'участников'])} · {occasionLabel(r.occasion)}
                 </span>
               </span>
               {r.id === room.id && <Check size={20} className="shrink-0 text-accent" strokeWidth={3} />}

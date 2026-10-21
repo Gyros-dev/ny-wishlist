@@ -1,8 +1,11 @@
 import { ArrowLeftRight, ChevronDown } from 'lucide-react';
 import { useMemo } from 'react';
+import type { Occasion } from '../api/types';
 import { newYearCountdown, plural } from '../utils/format';
 
-function Snow({ count = 22 }: { count?: number }) {
+const CONFETTI = ['#ffd166', '#ffffff', '#7ae0c3', '#8fd3ff', '#ffb3c7'];
+
+function Snow({ count = 22, confetti = false }: { count?: number; confetti?: boolean }) {
   // Детерминированная «случайность», чтобы снег не прыгал при перерисовке
   const flakes = useMemo(
     () =>
@@ -27,8 +30,9 @@ function Snow({ count = 22 }: { count?: number }) {
           style={{
             left: f.left,
             width: f.size,
-            height: f.size,
+            height: confetti ? f.size * 1.6 : f.size,
             opacity: f.opacity,
+            ...(confetti && { background: CONFETTI[i % CONFETTI.length], borderRadius: 1.5 }),
             animationDuration: `${f.duration}s`,
             animationDelay: `${f.delay}s`,
           }}
@@ -38,27 +42,46 @@ function Snow({ count = 22 }: { count?: number }) {
   );
 }
 
+export interface NextBirthday {
+  /** «Ирина» или «ваш» */
+  who: string;
+  /** «26 октября» */
+  date: string;
+  days: number;
+}
+
 /**
  * Праздничная шапка. С title/onTitleClick — шапка компании: название
- * открывает список компаний, приглашение и настройки.
+ * открывает список компаний, приглашение и настройки. В компании дней
+ * рождения — отсчёт до ближайшего из них.
  */
 export function Hero({
   title = 'Вишлист',
   subtitle,
   onTitleClick,
+  occasion = 'new_year',
+  nextBirthday = null,
 }: {
   title?: string;
   subtitle: string;
   onTitleClick?: () => void;
+  occasion?: Occasion;
+  nextBirthday?: NextBirthday | null;
 }) {
   const { year, days, celebrating } = newYearCountdown();
+  const birthdays = occasion === 'birthdays';
   return (
-    <div className="hero relative overflow-hidden rounded-[22px] px-5 pt-5 pb-5 text-white shadow-[0_10px_30px_-12px_rgba(59,42,143,0.6)]">
-      <Snow />
+    <div
+      className={`hero relative overflow-hidden rounded-[22px] px-5 pt-5 pb-5 text-white shadow-[0_10px_30px_-12px_rgba(59,42,143,0.6)] ${
+        birthdays ? 'hero-bday' : ''
+      }`}
+      data-occasion={occasion}
+    >
+      <Snow confetti={birthdays} />
       <div className="relative flex items-center gap-4">
         <div className="min-w-0 flex-1">
           <div className="text-[12px] font-semibold tracking-[0.12em] text-white/70 uppercase">
-            Новый год {year}
+            {birthdays ? 'Дни рождения' : `Новый год ${year}`}
           </div>
           {onTitleClick ? (
             <button
@@ -73,6 +96,11 @@ export function Hero({
             <h1 className="mt-1 text-[26px] leading-tight font-bold">{title}</h1>
           )}
           <p className="mt-1 text-[14px] leading-snug text-white/80">{subtitle}</p>
+          {birthdays && nextBirthday && (
+            <p className="mt-0.5 text-[14px] leading-snug font-medium" data-next-birthday>
+              🎂 Ближайший — {nextBirthday.who}, {nextBirthday.date}
+            </p>
+          )}
           {onTitleClick && (
             <button
               onClick={onTitleClick}
@@ -84,7 +112,23 @@ export function Hero({
           )}
         </div>
         <div className="flex h-[84px] w-[84px] shrink-0 flex-col items-center justify-center rounded-[20px] bg-white/14 ring-1 ring-white/25 backdrop-blur-sm">
-          {celebrating ? (
+          {birthdays ? (
+            nextBirthday && nextBirthday.days > 0 ? (
+              <>
+                <span className="tabular text-[30px] leading-none font-bold">{nextBirthday.days}</span>
+                <span className="mt-1 text-[11px] leading-tight text-white/80">
+                  {plural(nextBirthday.days, ['день', 'дня', 'дней'])}
+                  <br />
+                  до праздника
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-[38px] leading-none">🎂</span>
+                {nextBirthday && <span className="mt-1 text-[11px] text-white/80">сегодня</span>}
+              </>
+            )
+          ) : celebrating ? (
             <span className="text-[38px]">🎉</span>
           ) : (
             <>

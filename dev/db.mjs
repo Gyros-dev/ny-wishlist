@@ -105,15 +105,24 @@ export const DEMO_INVITE = 'nyfriends2027';
 
 /**
  * Демо-данные: компания «Друзья · Новый год» в донгах, где уже собирают
- * Алисе, и отдельная «Работа» в рублях — чтобы было видно, что компании
- * друг друга не видят.
+ * Алисе, и «Работа» в рублях, где скидываются на дни рождения, — чтобы было
+ * видно, что компании друг друга не видят.
+ *
+ * birthdaysFrom — от какой даты считать дни рождения коллег (у Ирины через
+ * 5 дней, у Петра через 40, у Кати через 100). Без неё дат нет: тестам
+ * нужны данные, которые не зависят от сегодняшнего дня.
  */
-export async function seedDemo(db) {
+export async function seedDemo(db, { birthdaysFrom = null } = {}) {
   const as = (id) => signInitData(PERSONAS[id]);
   const gifts = {};
 
-  const createRoom = async (owner, name, currency, code) => {
-    const room = await callRpc(db, 'wl_create_room', { p_init_data: as(owner), p_name: name, p_currency: currency });
+  const createRoom = async (owner, name, currency, code, occasion = 'new_year') => {
+    const room = await callRpc(db, 'wl_create_room', {
+      p_init_data: as(owner),
+      p_name: name,
+      p_currency: currency,
+      p_occasion: occasion,
+    });
     if (code) await db.query('update app.rooms set invite_code = $1 where id = $2', [code, room.id]);
     return { ...room, invite_code: code ?? room.invite_code };
   };
@@ -183,7 +192,13 @@ export async function seedDemo(db) {
   await vote(friends, 1001, 1003, 'Набор акварели');
 
   // --- Работа (RUB): Катя состоит в обеих компаниях ---
-  const work = await createRoom(1004, 'Работа', 'RUB');
+  const work = await createRoom(1004, 'Работа', 'RUB', null, 'birthdays');
+  if (birthdaysFrom) {
+    for (const [id, days] of [[1006, 5], [1007, 40], [1004, 100]]) {
+      const d = new Date(birthdaysFrom.getTime() + days * 86400000);
+      await callRpc(db, 'wl_set_birthday', { p_init_data: as(id), p_month: d.getMonth() + 1, p_day: d.getDate() });
+    }
+  }
   for (const id of [1006, 1007]) await join(id, work);
   await addGift(work, 1006, '🎟️', 'Билеты в театр', 6000);
   await addGift(work, 1006, '📚', 'Книга про дизайн', 2500);

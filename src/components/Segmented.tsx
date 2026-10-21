@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { useId } from 'react';
 import { hapticSelection } from '../telegram/webapp';
 
 export function Segmented<T extends string>({
@@ -10,6 +11,8 @@ export function Segmented<T extends string>({
   options: { value: T; label: string; badge?: number }[];
   onChange: (value: T) => void;
 }) {
+  // у каждого переключателя своя подложка — иначе она перелетает между ними
+  const pillId = useId();
   return (
     <div className="flex rounded-[12px] bg-fill p-[3px]" role="tablist">
       {options.map((o) => {
@@ -30,7 +33,7 @@ export function Segmented<T extends string>({
           >
             {active && (
               <motion.span
-                layoutId="segmented-pill"
+                layoutId={pillId}
                 className="absolute inset-0 rounded-[9px] bg-card shadow-[0_1px_4px_rgba(0,0,0,0.12)]"
                 transition={{ type: 'spring', stiffness: 500, damping: 38 }}
               />

@@ -1,5 +1,5 @@
 import { initData } from '../telegram/webapp';
-import type { Bootstrap, FriendPayload, Gift, GiftDraft, LinkPreview, Room, RoomPreview, SantaState } from './types';
+import type { Bootstrap, FriendPayload, Gift, GiftDraft, LinkPreview, Occasion, Person, Room, RoomPreview, SantaState } from './types';
 
 const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/+$/, '');
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY ?? '';
@@ -69,8 +69,16 @@ export const api = {
   /** roomId — какую компанию открыть; null — последнюю открытую */
   bootstrap: (roomId: string | null) => rpc<Bootstrap>('wl_bootstrap', { p_room_id: roomId }),
 
-  createRoom: (name: string, currency: string) =>
-    rpc<Room>('wl_create_room', { p_name: name, p_currency: currency }),
+  createRoom: (name: string, currency: string, occasion: Occasion) =>
+    rpc<Room>('wl_create_room', { p_name: name, p_currency: currency, p_occasion: occasion }),
+
+  /** повод компании меняет только её создатель */
+  setRoomOccasion: (roomId: string, occasion: Occasion) =>
+    rpc<Room>('wl_set_room_occasion', { p_room_id: roomId, p_occasion: occasion }),
+
+  /** свой день рождения: день и месяц; null — убрать */
+  setBirthday: (birthday: { month: number; day: number } | null) =>
+    rpc<Person>('wl_set_birthday', { p_month: birthday?.month ?? null, p_day: birthday?.day ?? null }),
 
   roomPreview: (inviteCode: string) => rpc<RoomPreview>('wl_room_preview', { p_invite_code: inviteCode }),
 

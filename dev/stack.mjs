@@ -38,7 +38,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function startApi({ port = 54321, latencyMs = 120, seed = true, log = false } = {}) {
   let db = await createDb();
-  if (seed) await seedDemo(db);
+  if (seed) await seedDemo(db, { birthdaysFrom: new Date() });
   // бот (Edge Function) против поддельного Telegram
   let fakeTelegram = createFakeTelegram();
   const bot = () =>
@@ -100,7 +100,7 @@ export async function startApi({ port = 54321, latencyMs = 120, seed = true, log
         await db.close();
         db = await createDb();
         fakeTelegram = createFakeTelegram();
-        if (url.searchParams.get('empty') !== '1') await seedDemo(db);
+        if (url.searchParams.get('empty') !== '1') await seedDemo(db, { birthdaysFrom: new Date() });
         return send(res, 200, { ok: true });
       }
       return send(res, 404, { message: 'Not found' });

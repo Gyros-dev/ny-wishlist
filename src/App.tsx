@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage, isBackendConfigured } from './api/client';
-import type { Bootstrap, Gift, Member, Room, RoomPreview } from './api/types';
+import type { Bootstrap, Gift, Member, Occasion, Room, RoomPreview } from './api/types';
+import { BirthdaySheet } from './components/BirthdaySheet';
 import { Toaster, toast } from './components/Toast';
 import { usePolling } from './hooks/usePolling';
 import { FriendScreen } from './screens/FriendScreen';
@@ -52,6 +53,7 @@ function WishlistApp() {
   const [editor, setEditor] = useState<{ open: boolean; gift: Gift | null }>({ open: false, gift: null });
   const [roomsOpen, setRoomsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [birthdayOpen, setBirthdayOpen] = useState(false);
   const bootRef = useRef<Bootstrap | null>(null);
 
   /** roomId — какую компанию открыть; null — последнюю открытую. */
@@ -100,15 +102,24 @@ function WishlistApp() {
   usePolling(
     refresh,
     boot?.santa?.status === 'open' ? 5000 : 15000,
-    !!boot?.room && !friend && !editor.open && !roomsOpen && !createOpen && !invite,
+    !!boot?.room && !friend && !editor.open && !roomsOpen && !createOpen && !birthdayOpen && !invite,
   );
 
   const closeEditor = useCallback(() => setEditor((e) => ({ ...e, open: false })), []);
   const closeRooms = useCallback(() => setRoomsOpen(false), []);
   const closeCreate = useCallback(() => setCreateOpen(false), []);
+  const closeBirthday = useCallback(() => setBirthdayOpen(false), []);
   useBackButton(
     Layer.sheet,
-    editor.open ? closeEditor : createOpen ? closeCreate : roomsOpen ? closeRooms : null,
+    editor.open
+      ? closeEditor
+      : createOpen
+        ? closeCreate
+        : roomsOpen
+          ? closeRooms
+          : birthdayOpen
+            ? closeBirthday
+            : null,
   );
 
   const room = boot?.room ?? null;
@@ -137,7 +148,12 @@ function WishlistApp() {
       toast('Чтобы делиться приглашением, задайте VITE_BOT_USERNAME', 'error');
       return;
     }
-    shareToTelegram(link, `Залетай в «${room.name}» — собираем вишлисты на Новый год 🎁`);
+    shareToTelegram(
+      link,
+      room.occasion === 'birthdays'
+        ? `Залетай в «${room.name}» — собираем вишлисты на дни рождения 🎂`
+        : `Залетай в «${room.name}» — собираем вишлисты на Новый год 🎁`,
+    );
   };
 
   const onRoomCreated = async (created: Room) => {
@@ -182,6 +198,35 @@ function WishlistApp() {
         cancel: 'Тайный Санта отменён',
       } as const;
       toast(messages[action], 'success');
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    }
+  };
+
+  const saveBirthday = async (birthday: { month: number; day: number } | null) => {
+    try {
+      const me = await api.setBirthday(birthday);
+      setBoot((b) => b && { ...b, me: { ...b.me, birthday: me.birthday ?? null } });
+      setBirthdayOpen(false);
+      toast(birthday ? 'Готово — друзья увидят дату' : 'Дата убрана', 'success');
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    }
+  };
+
+  const changeOccasion = async (occasion: Occasion) => {
+    if (!room || occasion === room.occasion) return;
+    const ok = await confirmAction(
+      occasion === 'birthdays'
+        ? 'Сделать компанию для дней рождения? У каждого будет свой праздник, бот напомнит о нём заранее, а через неделю после дня рождения сбор закроется. Тайный Санта скроется.'
+        : 'Сделать компанию новогодней? Сборы перестанут закрываться после дней рождения, вернётся Тайный Санта.',
+    );
+    if (!ok) return;
+    try {
+      await api.setRoomOccasion(room.id, occasion);
+      setRoomsOpen(false);
+      await load(room.id);
+      toast(occasion === 'birthdays' ? 'Теперь это компания дней рождения 🎂' : 'Теперь это новогодняя компания 🎄', 'success');
     } catch (err) {
       toast(errorMessage(err), 'error');
     }
@@ -247,6 +292,7 @@ function WishlistApp() {
               onOpenRooms={() => setRoomsOpen(true)}
               onInvite={shareInvite}
               onSanta={onSanta}
+              onEditBirthday={() => setBirthdayOpen(true)}
             />
           </motion.div>
 
@@ -262,6 +308,7 @@ function WishlistApp() {
               >
                 <FriendScreen
                   roomId={room.id}
+                  occasion={room.occasion}
                   friendId={friend.id}
                   preview={friend.preview}
                   onBack={() => {
@@ -297,6 +344,13 @@ function WishlistApp() {
               setCreateOpen(true);
             }}
             onLeave={() => void leaveRoom()}
+            onOccasion={(occasion) => void changeOccasion(occasion)}
+          />
+          <BirthdaySheet
+            open={birthdayOpen}
+            value={boot.me.birthday ?? null}
+            onClose={closeBirthday}
+            onSave={saveBirthday}
           />
         </>
       )}

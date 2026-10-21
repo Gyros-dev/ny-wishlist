@@ -2,7 +2,7 @@ import { motion, useIsPresent } from 'framer-motion';
 import { Check, ExternalLink, Loader2, Lock, MessageCircle, Plus } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage, prepareChat } from '../api/client';
-import type { FriendGift, FriendPayload, Member, Supporter } from '../api/types';
+import type { FriendGift, FriendPayload, Member, Occasion, Supporter } from '../api/types';
 import { AmountInput } from '../components/AmountInput';
 import { Avatar } from '../components/Avatar';
 import { Confetti } from '../components/Confetti';
@@ -24,6 +24,7 @@ import {
   requestWriteAccess,
   supportsRequestChat,
 } from '../telegram/webapp';
+import { daysUntilBirthday, formatBirthday, inDaysText, parseBirthday } from '../utils/birthday';
 import { copyText, startGroupLink } from '../utils/share';
 import {
   currencySymbol,
@@ -41,6 +42,8 @@ const layoutSpring = { type: 'spring', stiffness: 380, damping: 34 } as const;
 
 interface Props {
   roomId: string;
+  /** в компании дней рождения в шапке — дата и сколько до неё */
+  occasion: Occasion;
   friendId: number;
   preview: Member | null;
   onBack: () => void;
@@ -77,7 +80,7 @@ function giftView(gift: FriendGift, draft: number | null) {
   };
 }
 
-export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onForbidden }: Props) {
+export function FriendScreen({ roomId, occasion, friendId, preview, onBack, onChanged, onForbidden }: Props) {
   const isPresent = useIsPresent();
   const [data, setData] = useState<FriendPayload | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -359,6 +362,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
               {friend.username ? `@${friend.username} · ` : ''}
               {data ? pluralize(allGifts.length, ['подарок', 'подарка', 'подарков']) : 'вишлист'}
             </div>
+            {occasion === 'birthdays' && <FriendBirthday birthday={friend.birthday ?? null} />}
           </div>
         )}
 
@@ -946,6 +950,21 @@ function PurchaseCard({
       >
         {spinner ?? '🛍 Я покупаю'}
       </button>
+    </div>
+  );
+}
+
+/** Дата рождения друга в шапке: «🎂 26 октября · через 5 дней» */
+function FriendBirthday({ birthday }: { birthday: string | null }) {
+  const b = parseBirthday(birthday);
+  if (!b) return <div className="mt-2 text-[14px] text-hint">🎂 Дату рождения пока не указали</div>;
+  const days = daysUntilBirthday(b);
+  return (
+    <div
+      className={`mt-2 rounded-full px-3 py-1 text-[14px] font-semibold ${days === 0 ? 'bg-success/15 text-success' : 'bg-gold/20'}`}
+      data-friend-birthday
+    >
+      {days === 0 ? '🎉 Сегодня день рождения!' : `🎂 ${formatBirthday(b)} · ${inDaysText(days)}`}
     </div>
   );
 }

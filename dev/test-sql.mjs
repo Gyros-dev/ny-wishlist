@@ -747,3 +747,123 @@ describe('Тайный Санта', () => {
     assert.equal(res, null);
   });
 });
+
+describe('дни рождения', () => {
+  let room;
+  const notes = async (userId) =>
+    (await db.query('select text from app.notifications where user_id = $1 order by id', [userId])).rows.map((r) => r.text);
+  const sql = async (text, params = []) => (await db.query(text, params)).rows;
+
+  before(async () => {
+    room = await rpc('wl_create_room', { p_init_data: as(1006), p_name: 'ДР в отделе', p_currency: 'RUB', p_occasion: 'birthdays' });
+    for (const id of [1007, 1008]) await rpc('wl_join_room', { p_init_data: as(id), p_invite_code: room.invite_code });
+  });
+
+  test('повод компании: по умолчанию Новый год, менять может только создатель', async () => {
+    assert.equal(room.occasion, 'birthdays');
+    const boot = await rpc('wl_bootstrap', { p_init_data: as(1004), p_room_id: friends.id });
+    assert.equal(boot.room.occasion, 'new_year');
+    await rejects(rpc('wl_set_room_occasion', { p_init_data: as(1007), p_room_id: room.id, p_occasion: 'new_year' }), {
+      message: /создатель/,
+    });
+    await rejects(rpc('wl_set_room_occasion', { p_init_data: as(1006), p_room_id: room.id, p_occasion: 'easter' }), { message: /повод/ });
+    const back = await rpc('wl_set_room_occasion', { p_init_data: as(1006), p_room_id: room.id, p_occasion: 'new_year' });
+    assert.equal(back.occasion, 'new_year');
+    await rpc('wl_set_room_occasion', { p_init_data: as(1006), p_room_id: room.id, p_occasion: 'birthdays' });
+  });
+
+  test('Тайный Санта — только в новогодних компаниях', async () => {
+    const boot = await rpc('wl_bootstrap', { p_init_data: as(1006), p_room_id: room.id });
+    assert.equal(boot.santa, null);
+    await rejects(rpc('wl_santa', { p_init_data: as(1006), p_room_id: room.id, p_action: 'open', p_budget: null }), {
+      message: /новогодних/,
+    });
+  });
+
+  test('дата рождения: день и месяц, 29 февраля можно, 30-го — нет; видят участники компании', async () => {
+    await rejects(rpc('wl_set_birthday', { p_init_data: as(1007), p_month: 2, p_day: 30 }), { message: /Такой даты нет/ });
+    await rejects(rpc('wl_set_birthday', { p_init_data: as(1007), p_month: 3, p_day: null }), { message: /и день, и месяц/ });
+    const leap = await rpc('wl_set_birthday', { p_init_data: as(1007), p_month: 2, p_day: 29 });
+    assert.equal(leap.birthday, '02-29');
+    const me = await rpc('wl_set_birthday', { p_init_data: as(1007), p_month: 3, p_day: 15 });
+    assert.equal(me.birthday, '03-15');
+
+    const boot = await rpc('wl_bootstrap', { p_init_data: as(1008), p_room_id: room.id });
+    assert.equal(boot.members.find((m) => m.id === 1007).birthday, '03-15');
+    const friend = await rpc('wl_friend', { p_init_data: as(1008), p_room_id: room.id, p_friend_id: 1007 });
+    assert.equal(friend.friend.birthday, '03-15');
+    assert.equal((await rpc('wl_bootstrap', { p_init_data: as(1007), p_room_id: room.id })).me.birthday, '03-15');
+  });
+
+  test('ближайший и прошедший день рождения, 29 февраля в невисокосный год — 28-го', async () => {
+    const [r] = await sql(`select
+      app.next_birthday(2, 29, '2027-01-10')::text as leap,
+      app.next_birthday(2, 29, '2028-01-10')::text as leap28,
+      app.next_birthday(3, 15, '2027-03-15')::text as today,
+      app.next_birthday(3, 15, '2027-03-16')::text as next_year,
+      app.last_birthday(12, 31, '2027-06-01')::text as last`);
+    assert.deepEqual(r, { leap: '2027-02-28', leap28: '2028-02-29', today: '2027-03-15', next_year: '2028-03-15', last: '2026-12-31' });
+  });
+
+  test('напоминания: за неделю — всем, кроме именинника; в сам день — поздравление', async () => {
+    await db.query('delete from app.notifications');
+    await db.query("select app.daily_reminders('2027-03-08')");
+    assert.ok((await notes(1006)).some((t) => /Через 7 дней день рождения: Пётр \(«ДР в отделе»\)\. Загляните в вишлист/.test(t)));
+    assert.ok((await notes(1008)).some((t) => /Через 7 дней день рождения: Пётр/.test(t)));
+    const petr = await notes(1007);
+    assert.ok(!petr.some((t) => /день рождения: Пётр/.test(t)), 'имениннику о его сборе не пишем');
+    assert.ok(petr.some((t) => /7 дней ваш день рождения, а вишлист в «ДР в отделе» пока пустой/.test(t)));
+
+    await db.query('delete from app.notifications');
+    await db.query("select app.daily_reminders('2027-03-15')");
+    assert.deepEqual(await notes(1007), ['🎉 С днём рождения, Пётр! Пусть сбудется всё из вишлиста 🎁']);
+  });
+
+  test('через неделю после дня рождения сбор закрывается, купленное и забронированное — подарено', async () => {
+    const save = (title, price) =>
+      rpc('wl_save_gift', { p_init_data: as(1007), p_room_id: room.id, p_gift_id: null, p_title: title, p_price: price, p_emoji: null, p_link: null });
+    const scarf = await save('Шарф', 1500);
+    const mug = await save('Кружка с котом', 700);
+    const lamp = await save('Лампа', 9000);
+    for (const [id, amount] of [[1006, 1000], [1008, 800]]) {
+      await rpc('wl_set_pledge', { p_init_data: as(id), p_room_id: room.id, p_friend_id: 1007, p_amount: amount });
+    }
+    for (const id of [1006, 1008]) {
+      await rpc('wl_vote', { p_init_data: as(id), p_room_id: room.id, p_friend_id: 1007, p_gift_id: scarf.id, p_on: true });
+    }
+    await rpc('wl_reserve_gift', { p_init_data: as(1008), p_room_id: room.id, p_gift_id: mug.id, p_reserve: true });
+    await rpc('wl_pool_purchase', { p_init_data: as(1006), p_room_id: room.id, p_friend_id: 1007, p_action: 'take' });
+    // всё это было до дня рождения 15 марта
+    for (const table of ['pledges', 'reservations']) {
+      await db.query(`update app.${table} set created_at = '2027-03-01' where room_id = $1`, [room.id]);
+    }
+
+    const pool = async () => (await sql('select count(*)::int as n from app.pledges where room_id = $1', [room.id]))[0].n;
+    await db.query("select app.daily_reminders('2027-03-20')");
+    assert.equal(await pool(), 2, 'первую неделю после праздника сбор не трогаем');
+    await db.query("select app.daily_reminders('2027-03-22')");
+    assert.equal(await pool(), 2, 'покупку ещё делают — ждём');
+
+    await rpc('wl_pool_purchase', { p_init_data: as(1006), p_room_id: room.id, p_friend_id: 1007, p_action: 'bought' });
+    await db.query('delete from app.notifications');
+    await db.query("select app.daily_reminders('2027-03-23')");
+    assert.equal(await pool(), 0);
+    const left = await sql(
+      `select (select count(*) from app.votes where room_id = $1)::int as votes,
+              (select count(*) from app.pool_purchases where room_id = $1)::int as purchases,
+              (select count(*) from app.reservations where room_id = $1)::int as reservations`,
+      [room.id],
+    );
+    assert.deepEqual(left[0], { votes: 0, purchases: 0, reservations: 0 });
+    const mine = (await rpc('wl_bootstrap', { p_init_data: as(1007), p_room_id: room.id })).gifts;
+    const received = Object.fromEntries(mine.map((g) => [g.id, g.received]));
+    assert.deepEqual([received[scarf.id], received[mug.id], received[lamp.id]], [true, true, false]);
+    assert.match((await notes(1007))[0], /отметили подаренным: .*Кружка с котом.*Шарф/);
+
+    // новый сбор — уже к следующему дню рождения: его не трогаем
+    await rpc('wl_set_pledge', { p_init_data: as(1008), p_room_id: room.id, p_friend_id: 1007, p_amount: 500 });
+    await db.query("update app.pledges set created_at = '2027-03-24' where room_id = $1", [room.id]);
+    await db.query("select app.daily_reminders('2027-04-20')");
+    assert.equal(await pool(), 1);
+  });
+});
