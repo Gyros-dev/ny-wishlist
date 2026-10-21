@@ -2,7 +2,8 @@
 //
 // Поднимает локальный стенд, открывает эмулятор Telegram с двумя телефонами
 // (Катя зовёт Макса в компанию «Друзья · Новый год», где уже собирают
-// Алисе) и проигрывает сценарий через Playwright. Кадры снимаются CDP-скринкастом и собираются
+// Алисе: подарок по ссылке, «хватает сразу на N», голосование за несколько
+// подарков, покупка и Тайный Санта) и проигрывает сценарий через Playwright. Кадры снимаются CDP-скринкастом и собираются
 // ffmpeg в H.264.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { startStack } from './stack.mjs';
+import { PERSONAS, signInitData } from './db.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'demo', 'wishlist-demo.mp4');
@@ -143,8 +145,21 @@ async function swipe(p, id, dy, screen = 'friend') {
 const max = phone(1005);
 const katya = phone(1004);
 
+/** RPC от имени демо-персонажа — действия тех, кого нет на экране. */
+async function rpc(user, fn, args) {
+  const res = await fetch(`${stack.apiUrl}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', apikey: 'demo' },
+    body: JSON.stringify({ p_init_data: signInitData(PERSONAS[user]), ...args }),
+  });
+  if (!res.ok) throw new Error(`${fn}: ${await res.text()}`);
+  return res.json();
+}
+const friendsRoomId = (await rpc(1004, 'wl_bootstrap', { p_room_id: null })).room.id;
+
 // ---------- сценарий ----------
 const coffee = '[data-gift="Капсульная кофемашина"]';
+const book = '[data-gift^="Книга"]';
 await wait(1600);
 
 // 1. Компания и приглашение
@@ -166,22 +181,20 @@ await tap(max.main, 300);
 await max.app('[data-screen="home"]').waitFor({ timeout: 10000 });
 await wait(1200);
 
-// 2. Свой вишлист
+// 2. Свой вишлист: подарок по ссылке
 await step(1);
-await say('Цены — в валюте компании, здесь это донги');
+await say('Достаточно вставить ссылку на товар…');
 await tap(max.main, 800);
-await tap(max.app('input[name="title"]'), 250);
-await typeText('Наушники Sony');
-await wait(250);
-await tap(max.app('input[name="price"]'), 250);
-await typeText('7990000', 110);
-await wait(300);
-await say('Можно приложить фото подарка и ссылку на товар');
-await attachPhoto(max, join(ROOT, 'dev', 'demo-images', 'headphones.jpg'));
-await wait(800);
 await tap(max.app('input[name="link"]'), 250);
-await typeText('shopee.vn/sony-wh-1000xm5', 40);
-await wait(500);
+await typeText('shopee.vn/sony-wh-1000xm5', 45);
+await max.app('[data-photo-preview]').waitFor({ timeout: 10000 });
+await say('…название, цена в донгах и фото подтянулись сами');
+await wait(2600);
+await say('Можно добавить комментарий и отметить самое желанное');
+await tap(max.app('textarea[name="note"]'), 250);
+await typeText('Чёрные или серебристые', 70);
+await wait(300);
+await tap(max.app('[data-must-have]'), 900);
 await tap(max.main, 1400);
 
 await tap(max.main, 700);
@@ -195,62 +208,89 @@ await tap(max.main, 1400);
 // 3. Выбор друга
 await step(2);
 await say('Во вкладке «Участники» — чьи вишлисты уже готовы');
-await tap(max.app('[data-tab="friends"]'), 1400);
-await say('Сумм не видно — только, на какие подарки уже хватает');
-await wait(2000);
+await tap(max.app('[data-tab="friends"]'), 1200);
+await say('На карточке видно, на сколько подарков уже хватает и сколько не хватает ещё на один');
+await wait(2800);
 await tap(max.app('[data-friend="Алиса"]'), 1200);
 await tap(katya.app('[data-friend="Алиса"]'), 1000);
-await swipe(katya, 1004, 520);
+await say('Миша и Катя уже скинулись Алисе: хватает сразу на книгу и плед, но не на кофемашину');
+await wait(3200);
 
-// 4. Сумма и проценты
+// 4. Сумма
 await step(3);
-await say('Макс вписывает, сколько готов потратить…');
-await swipe(max, 1005, 200);
-await tap(max.app('#pledge'), 300);
-await typeText('1800000', 260);
+await say('Макс может вписать любую сумму — или одним тапом ровно столько, сколько не хватает');
 await wait(600);
-await say('…и шкалы сразу показывают, хватит ли с его вкладом. Штриховка — его часть');
-await wait(1000);
-await swipe(max, 1005, 360);
-await wait(1400);
-await say('Кофемашина теперь по карману ✓ А сумму Макса не увидит никто');
-await wait(1400);
-await tap(max.main, 2200);
-
-await say('У Кати шкалы обновились сами — в процентах, без сумм');
-await katya.frame.locator(coffee).getByText('Хватает', { exact: true }).waitFor({ timeout: 10000 });
+await tap(max.app('[data-top-up]'), 900);
+await max.scrollTo('[data-summary]', 12);
+await say('С его вкладом хватит сразу на три подарка');
+await wait(2400);
+await max.scrollTo(coffee, 150);
+await say('Шкалы показывают это заранее, штриховка — его часть. Сумму Макса не увидит никто');
+await wait(2800);
+await tap(max.main, 1800);
+await say('У Кати всё обновилось само');
+await katya.app('[data-together="3"]').waitFor({ timeout: 10000 });
 await wait(2400);
 
-// 5. Бронь и голосование
+// 5. Голосование за несколько подарков
 await step(4);
-await say('Катя решила подарить книгу сама — бронирует её целиком');
+await say('Миша голосовал за плед. Катя добавляет голос за кофемашину');
 await wait(600);
-await tap(katya.app('[data-gift^="Книга"] [data-reserve]'), 700);
-await tap(page.locator('#phone-1004 .popup-layer button.ok'), 1200);
-await say('Книга ушла из общего сбора. Кто её дарит — не видит никто');
-await max.app('[data-reserved-gift^="Книга"]').waitFor({ timeout: 10000 });
-await max.scrollTo('[data-reserved-section]', 140);
-await wait(2600);
-await say('Голосование тоже анонимное — видны только доли голосов');
-await wait(800);
-await tap(katya.app(`${coffee} [data-vote]`), 1600);
-await max.app(`${coffee} [data-vote-pct="33"]`).waitFor({ timeout: 10000 });
-await max.scrollTo(coffee, 150);
-await say('Голосовать можно за несколько подарков — Макс тоже за кофемашину');
-await wait(1400);
-await tap(max.app(`${coffee} [data-vote]`), 900);
+await tap(katya.app(`${coffee} [data-vote]`), 900);
+await katya.app('[data-picked-preview]').waitFor({ timeout: 10000 });
+await katya.scrollTo('[data-picked-preview]', 70);
+await say('Денег хватает на оба — и ещё остаётся на книгу');
+await wait(3000);
+await max.app(`${book} [data-fits-extra]`).waitFor({ timeout: 10000 });
+await max.scrollTo(book, 120);
+await say('Макс голосует за книгу…');
+await wait(1000);
+await tap(max.app(`${book} [data-vote]`), 900);
+await max.app('[data-decision]').waitFor({ timeout: 10000 });
 await max.scrollTo('[data-decision]', 70);
-await say('Все участники сбора проголосовали — кофемашина побеждает 🏆');
-await wait(1500);
-await katya.frame.locator('[data-decision]').waitFor({ timeout: 10000 });
-await katya.scrollTo('[data-decision]', 70);
-await emu(() => window.emu.hideFinger());
+await say('…и в покупку попадают все три подарка 🏆');
 await wait(3000);
 
+// 6. Кто покупает
 await step(5);
+await say('Участники сбора видят друг друга — можно завести общий чат и договориться');
+await katya.scrollTo('[data-pool-team]', 70);
+await wait(2600);
+await say('Катя берёт покупку на себя');
+await tap(katya.app('[data-purchase-take]'), 1200);
+await max.app('[data-purchase="buying"]').waitFor({ timeout: 10000 });
+await max.scrollTo('[data-purchase]', 120);
+await say('Макс видит, кому переводить свою часть');
+await wait(2800);
+await say('Подарки куплены — Катя отмечает, и сбор закрывается');
+await tap(katya.app('[data-purchase-bought]'), 700);
+await tap(page.locator('#phone-1004 .popup-layer button:not(.cancel)').first(), 400);
+await katya.app('[data-closed]').waitFor({ timeout: 10000 });
+await katya.scrollTo('[data-summary]', 70);
+await max.app('[data-closed]').waitFor({ timeout: 10000 });
+await max.scrollTo('[data-summary]', 70);
+await wait(2600);
+
+// 7. Тайный Санта: Алиса открыла набор, Миша и Оля уже записались
+await rpc(1001, 'wl_santa', { p_room_id: friendsRoomId, p_action: 'open', p_budget: 500000 });
+for (const id of [1002, 1003]) await rpc(id, 'wl_santa', { p_room_id: friendsRoomId, p_action: 'join', p_budget: null });
+await step(6);
+await say('А ещё в компании можно провести Тайного Санту');
+await tap(page.locator('#phone-1004 .tg-left'), 200);
+await tap(page.locator('#phone-1005 .tg-left'), 600);
+await tap(katya.app('[data-santa-join]'), 500);
+await tap(max.app('[data-santa-join]'), 900);
+await say('Алиса проводит жеребьёвку — бот пишет каждому, кому он дарит. Пару знает только сам Санта');
+await wait(800);
+await rpc(1001, 'wl_santa', { p_room_id: friendsRoomId, p_action: 'draw', p_budget: null });
+await Promise.all([katya, max].map((p) => p.app('[data-santa-receiver]').waitFor({ timeout: 15000 })));
+await emu(() => window.emu.hideFinger());
+await wait(3600);
+
+await step(7);
 await say('');
 await emu(() => window.emu.outro(true));
-await wait(4500);
+await wait(5000);
 
 // ---------- сборка видео ----------
 await cdp.send('Page.stopScreencast');

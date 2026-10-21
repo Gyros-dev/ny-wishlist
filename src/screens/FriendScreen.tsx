@@ -341,7 +341,7 @@ export function FriendScreen({ roomId, friendId, preview, onBack, onChanged, onF
     <div className="mt-1 text-[14px] leading-snug" data-extras>
       ✨ Хватит ещё и на: <b>{extrasText}</b>
       {isSupporter && !closed && (
-        <span className="text-hint"> — проголосуйте, чтобы купить {extras.length > 1 ? 'их' : 'его'} вместе</span>
+        <span className="text-hint"> — проголосуйте, чтобы добавить в покупку</span>
       )}
     </div>
   );

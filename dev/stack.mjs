@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
 import { createBot, handleRequest } from '../supabase/functions/telegram-bot/index.ts';
+import { demoFetch } from './demo-shop.mjs';
 import { PERSONAS, RpcError, callRpc, createDb, seedDemo, signInitData } from './db.mjs';
 import { createFakeTelegram } from './fake-telegram.mjs';
 
@@ -40,7 +41,12 @@ export async function startApi({ port = 54321, latencyMs = 120, seed = true, log
   if (seed) await seedDemo(db);
   // бот (Edge Function) против поддельного Telegram
   let fakeTelegram = createFakeTelegram();
-  const bot = () => createBot({ query: async (text, params) => (await db.query(text, params)).rows, telegram: fakeTelegram.telegram });
+  const bot = () =>
+    createBot({
+      query: async (text, params) => (await db.query(text, params)).rows,
+      telegram: fakeTelegram.telegram,
+      fetchUrl: demoFetch,
+    });
 
   const server = createHttpServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);

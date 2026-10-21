@@ -94,8 +94,14 @@ function WishlistApp() {
     })();
   }, [load]);
 
-  // Список участников тоже живой: новые вишлисты и прогресс подтягиваются сами
-  usePolling(refresh, 15000, !!boot?.room && !friend && !editor.open && !roomsOpen && !createOpen && !invite);
+  // Список участников тоже живой: новые вишлисты и прогресс подтягиваются сами.
+  // Пока идёт набор в Тайного Санту — чаще: видно, кто записался, а пара
+  // появляется сразу после жеребьёвки.
+  usePolling(
+    refresh,
+    boot?.santa?.status === 'open' ? 5000 : 15000,
+    !!boot?.room && !friend && !editor.open && !roomsOpen && !createOpen && !invite,
+  );
 
   const closeEditor = useCallback(() => setEditor((e) => ({ ...e, open: false })), []);
   const closeRooms = useCallback(() => setRoomsOpen(false), []);
