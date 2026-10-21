@@ -33,34 +33,45 @@
       <stop offset="0" stop-color="#ff6470"/>
       <stop offset="1" stop-color="#c41f2e"/>
     </linearGradient>
-    <linearGradient id="snow" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f4f7ff"/>
-      <stop offset="1" stop-color="#cfd9f5"/>
+    <linearGradient id="cone" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7be3c8"/>
+      <stop offset="1" stop-color="#2fb39a"/>
     </linearGradient>
+    <clipPath id="coneClip">
+      <path d="M418 268 L548 58 L640 262 Q 530 300 418 268 Z"/>
+    </clipPath>
     <symbol id="star" viewBox="-1 -1 2 2">
       <path d="M0 -1 Q0 0 1 0 Q0 0 0 1 Q0 0 -1 0 Q0 0 0 -1Z" fill="#ffe597"/>
     </symbol>
   </defs>
 
-  <!-- фон: зимняя ночь (для баннера вырезается) -->
+  <!-- фон: праздничная ночь с конфетти (для баннера вырезается) -->
   <!-- backdrop:start -->
   <rect width="1024" height="1024" fill="url(#bg)"/>
   <circle cx="512" cy="640" r="430" fill="url(#glow)"/>
-  <g fill="#ffffff">
-    <circle cx="120" cy="140" r="6" opacity="0.7"/>
-    <circle cx="210" cy="250" r="4" opacity="0.5"/>
-    <circle cx="86" cy="420" r="5" opacity="0.6"/>
-    <circle cx="300" cy="96" r="5" opacity="0.6"/>
-    <circle cx="420" cy="170" r="3" opacity="0.5"/>
-    <circle cx="880" cy="120" r="6" opacity="0.7"/>
-    <circle cx="950" cy="300" r="4" opacity="0.5"/>
-    <circle cx="820" cy="380" r="3" opacity="0.5"/>
-    <circle cx="930" cy="560" r="5" opacity="0.6"/>
-    <circle cx="70" cy="640" r="4" opacity="0.5"/>
-    <circle cx="160" cy="560" r="3" opacity="0.4"/>
-    <circle cx="610" cy="60" r="4" opacity="0.5"/>
-    <circle cx="980" cy="760" r="4" opacity="0.5"/>
-    <circle cx="40" cy="820" r="5" opacity="0.5"/>
+  <g>
+    <rect x="112" y="128" width="26" height="12" rx="3" fill="#ffd166" transform="rotate(-24 125 134)"/>
+    <rect x="214" y="236" width="20" height="10" rx="3" fill="#ff8fab" transform="rotate(32 224 241)"/>
+    <circle cx="86" cy="420" r="8" fill="#7be3c8"/>
+    <rect x="290" y="88" width="22" height="11" rx="3" fill="#8fd3ff" transform="rotate(18 301 93)"/>
+    <circle cx="420" cy="170" r="6" fill="#ffd166"/>
+    <rect x="870" y="110" width="26" height="12" rx="3" fill="#7be3c8" transform="rotate(28 883 116)"/>
+    <circle cx="950" cy="300" r="7" fill="#ff8fab"/>
+    <rect x="872" y="420" width="20" height="10" rx="3" fill="#ffd166" transform="rotate(-36 882 425)"/>
+    <rect x="920" y="552" width="24" height="11" rx="3" fill="#8fd3ff" transform="rotate(-14 932 557)"/>
+    <circle cx="70" cy="640" r="7" fill="#ffd166"/>
+    <rect x="150" y="552" width="22" height="10" rx="3" fill="#ff8fab" transform="rotate(40 161 557)"/>
+    <circle cx="610" cy="56" r="6" fill="#ff8fab"/>
+    <rect x="966" y="752" width="24" height="11" rx="3" fill="#7be3c8" transform="rotate(22 978 757)"/>
+    <circle cx="44" cy="820" r="7" fill="#8fd3ff"/>
+    <rect x="96" y="930" width="26" height="12" rx="3" fill="#ffd166" transform="rotate(-18 109 936)"/>
+    <circle cx="930" cy="930" r="7" fill="#ffd166"/>
+    <rect x="720" y="40" width="22" height="10" rx="3" fill="#ffd166" transform="rotate(-30 731 45)"/>
+  </g>
+  <!-- серпантин -->
+  <g fill="none" stroke-width="7" stroke-linecap="round">
+    <path d="M40 262 q 22 -18 40 0 t 40 0 t 40 0" stroke="#ff8fab" opacity="0.85"/>
+    <path d="M800 520 q 20 -18 38 0 t 38 0 t 38 0" stroke="#7be3c8" opacity="0.85"/>
   </g>
   <use href="#star" x="196" y="520" width="52" height="52"/>
   <use href="#star" x="810" y="430" width="40" height="40"/>
@@ -69,10 +80,8 @@
   <use href="#star" x="150" y="740" width="32" height="32"/>
   <use href="#star" x="868" y="236" width="24" height="24"/>
 
-  <!-- сугроб -->
-  <path d="M0 892 Q 180 842 360 872 Q 520 900 690 864 Q 860 830 1024 870 L1024 1024 L0 1024 Z" fill="url(#snow)"/>
   <!-- backdrop:end -->
-  <ellipse cx="512" cy="912" rx="300" ry="38" fill="#9fb0e0" opacity="0.55"/>
+  <ellipse cx="512" cy="914" rx="300" ry="40" fill="#0e0f2e" opacity="0.35"/>
 
   <!-- хвост -->
   <path d="M700 850 C 830 884, 912 820, 890 724 C 874 654, 930 612, 968 646" fill="none" stroke="#e892a8" stroke-width="26" stroke-linecap="round"/>
@@ -103,13 +112,15 @@
   <!-- голова -->
   <ellipse cx="512" cy="442" rx="232" ry="196" fill="url(#fur)"/>
 
-  <!-- новогодняя шапка -->
-  <path d="M378 258 C 392 150, 470 78, 584 76 C 688 74, 768 132, 782 212 C 748 196, 704 194, 652 248 Z" fill="url(#hat)"/>
-  <path d="M600 92 C 680 96, 744 140, 770 196" fill="none" stroke="#ff9aa3" stroke-width="10" stroke-linecap="round" opacity="0.6"/>
-  <rect x="356" y="230" width="318" height="66" rx="33" fill="#f7f9ff" transform="rotate(-7 515 263)"/>
-  <rect x="356" y="262" width="318" height="34" rx="17" fill="#dfe5f5" transform="rotate(-7 515 263)"/>
-  <circle cx="790" cy="222" r="42" fill="#f7f9ff"/>
-  <circle cx="778" cy="210" r="14" fill="#ffffff"/>
+  <!-- праздничный колпачок -->
+  <path d="M418 268 L548 58 L640 262 Q 530 300 418 268 Z" fill="url(#cone)"/>
+  <g clip-path="url(#coneClip)" fill="#fff4c2" opacity="0.9">
+    <path d="M380 150 L700 70 L700 104 L380 184 Z"/>
+    <path d="M380 222 L700 142 L700 176 L380 256 Z"/>
+  </g>
+  <path d="M418 268 Q 530 300 640 262" fill="none" stroke="#ffd166" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="548" cy="58" r="34" fill="url(#gold)"/>
+  <circle cx="538" cy="48" r="11" fill="#fff4c2" opacity="0.8"/>
 
   <!-- мордочка -->
   <ellipse cx="512" cy="518" rx="112" ry="80" fill="#d6dbe6"/>

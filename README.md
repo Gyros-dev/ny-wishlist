@@ -61,7 +61,7 @@ Telegram ─► GitHub Pages (React) ── POST /rest/v1/rpc/wl_* + initData �
 
 1. В [@BotFather](https://t.me/BotFather) выполните `/newbot` и сохраните токен.
 2. В `/mybots` → бот → *Bot Settings → Configure Mini App* включите Main Mini App с URL GitHub Pages (шаг 3), например `https://<user>.github.io/<repo>/`. Ссылки-приглашения тогда будут вида `t.me/<бот>?startapp=…`. Если вместо этого заводите приложение через `/newapp`, его short name задайте в переменной `APP_SHORT_NAME`.
-3. Оформление: `/setuserpic` → [`branding/bot-avatar.png`](branding/bot-avatar.png) (крыса с подарком), `/setdescriptionpic` → [`branding/bot-description.png`](branding/bot-description.png). Исходник — [`branding/rat.svg`](branding/rat.svg), PNG пересобирает `node dev/make-branding.mjs`.
+3. Оформление: `/setuserpic` → [`branding/bot-avatar.png`](branding/bot-avatar.png) (крыса с подарком в праздничном колпачке), `/setdescriptionpic` → [`branding/bot-description.png`](branding/bot-description.png). На декабрь есть новогодние версии с шапкой Санты: [`bot-avatar-new-year.png`](branding/bot-avatar-new-year.png) и [`bot-description-new-year.png`](branding/bot-description-new-year.png). Исходники — [`branding/rat.svg`](branding/rat.svg) и [`branding/rat-new-year.svg`](branding/rat-new-year.svg), PNG пересобирает `node dev/make-branding.mjs`. Имя бота, «О боте» и описание ставит [`branding/bot-profile.sql`](branding/bot-profile.sql): выполните его в SQL Editor после шага 2 — запросы к Bot API уйдут из базы, с токеном из `app.settings`.
 
 ### 2. Supabase
 
