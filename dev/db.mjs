@@ -44,10 +44,10 @@ export async function createDb() {
 }
 
 /** Подписывает initData так же, как это делает Telegram. */
-export function signInitData(user, { token = TEST_BOT_TOKEN, authDate, extra = {} } = {}) {
+export function signInitData(user, { token = TEST_BOT_TOKEN, authDate, extra = {}, allowsWriteToPm = true } = {}) {
   const params = new URLSearchParams({
     query_id: `AAH${user.id}local`,
-    user: JSON.stringify({ language_code: 'ru', allows_write_to_pm: true, ...user }),
+    user: JSON.stringify({ language_code: 'ru', allows_write_to_pm: allowsWriteToPm, ...user }),
     auth_date: String(authDate ?? Math.floor(Date.now() / 1000)),
     ...extra,
   });

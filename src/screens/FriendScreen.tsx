@@ -13,15 +13,16 @@ import { toast } from '../components/Toast';
 import { usePolling } from '../hooks/usePolling';
 import { Layer, useBackButton, useMainButton } from '../telegram/buttons';
 import {
-  allowsWriteToPm,
+  askBotMessagesOnce,
+  botCanWrite,
   confirmAction,
+  enableBotMessages,
   haptic,
   hapticNotification,
   hapticSelection,
   openLink,
   openTelegramLink,
   requestChat,
-  requestWriteAccess,
   supportsRequestChat,
 } from '../telegram/webapp';
 import { daysUntilBirthday, formatBirthday, inDaysText, parseBirthday } from '../utils/birthday';
@@ -184,6 +185,8 @@ export function FriendScreen({ roomId, occasion, friendId, preview, onBack, onCh
         if (unlocked.length || joining) setBurst((b) => b + 1);
         const best = unlocked[unlocked.length - 1];
         toast(best ? `Теперь хватает на ${best.emoji} ${best.title}!` : 'Вы в деле! Сумму видите только вы', 'success');
+        // участнику сбора бот пишет, кто покупает и что всё куплено
+        if (joining) void askBotMessagesOnce();
       } else {
         toast('Вы вышли из сбора');
       }
@@ -235,6 +238,22 @@ export function FriendScreen({ roomId, occasion, friendId, preview, onBack, onCh
       } as const;
       toast(messages[action], 'success');
       if (action === 'bought') setBurst((b) => b + 1);
+    } catch (err) {
+      if (!handleError(err)) toast(errorMessage(err), 'error');
+    } finally {
+      setPurchaseBusy(false);
+    }
+  };
+
+  const transfer = async (done: boolean) => {
+    if (purchaseBusy) return;
+    setPurchaseBusy(true);
+    const s = ++seq.current;
+    try {
+      apply(s, await api.markTransfer(roomId, friendId, done));
+      onChanged();
+      hapticNotification('success');
+      toast(done ? 'Отметили — покупатель увидит, что вы перевели' : 'Отметка снята', done ? 'success' : 'info');
     } catch (err) {
       if (!handleError(err)) toast(errorMessage(err), 'error');
     } finally {
@@ -337,8 +356,10 @@ export function FriendScreen({ roomId, occasion, friendId, preview, onBack, onCh
   // итоговый набор считает сервер: по голосам и в пределах общего бюджета
   const picked = gifts.filter((g) => g.picked);
   const pickedText = picked.map((g) => `${g.emoji} ${g.title}`).join(' + ');
-  // подарки, на которые хватит в придачу к выбранным по голосам
-  const extras = closed ? [] : gifts.filter((g, i) => !g.picked && views[i].extraMissing === 0);
+  // подарки, на которые хватит в придачу к выбранным по голосам; когда
+  // покупку уже взяли, набор зафиксирован — не предлагаем его менять
+  const purchaseTaken = !!data?.purchase;
+  const extras = purchaseTaken ? [] : gifts.filter((g, i) => !g.picked && views[i].extraMissing === 0);
   const extrasText = extras.map((g) => `${g.emoji} ${g.title}`).join(', ');
   const extrasHint = extras.length > 0 && (
     <div className="mt-1 text-[14px] leading-snug" data-extras>
@@ -557,8 +578,10 @@ export function FriendScreen({ roomId, occasion, friendId, preview, onBack, onCh
               <PurchaseCard
                 purchase={data.purchase}
                 pickedText={pickedText}
+                pledge={saved}
                 busy={purchaseBusy}
                 onAction={(action) => void purchase(action)}
+                onTransfer={(done) => void transfer(done)}
               />
             )}
 
@@ -580,7 +603,7 @@ export function FriendScreen({ roomId, occasion, friendId, preview, onBack, onCh
                   {picked.length ? <>покупаем {pickedText}</> : 'но на выбранные подарки пока не хватает'}
                   {extrasHint}
                 </motion.div>
-              ) : picked.length > 0 && !closed ? (
+              ) : picked.length > 0 && !purchaseTaken ? (
                 <div className="mb-3 rounded-[16px] bg-gold/12 px-4 py-3 text-[14px] leading-snug" data-picked-preview>
                   🏆 По голосам сейчас: <b>{pickedText}</b>
                   {picked.length > 1 ? ' — денег хватает на всё это вместе' : ''}
@@ -607,7 +630,7 @@ export function FriendScreen({ roomId, occasion, friendId, preview, onBack, onCh
                       view={views[i]}
                       fundedByDraft={changed && views[i].funded && !g.funded}
                       canVote={isSupporter && !closed}
-                      showExtra={!closed}
+                      showExtra={!purchaseTaken}
                       busy={busyId === g.id}
                       disabled={busyId !== null}
                       onVote={() => void vote(g)}
@@ -849,17 +872,100 @@ function GiftCard({
 function PurchaseCard({
   purchase,
   pickedText,
+  pledge,
   busy,
   onAction,
+  onTransfer,
 }: {
   purchase: FriendPayload['purchase'];
   pickedText: string;
+  pledge: number;
   busy: boolean;
   onAction: (action: 'take' | 'release' | 'bought' | 'reopen') => void;
+  onTransfer: (done: boolean) => void;
 }) {
   const gifts = purchase ? purchase.gifts.map((g) => `${g.emoji} ${g.title}`).join(' + ') : pickedText;
   const buyer = purchase?.buyer;
   const spinner = busy ? <Loader2 size={16} className="animate-spin" /> : null;
+  const share = purchase?.my_share ?? null;
+
+  // моя часть и «я перевёл» — тем, кто переводит покупателю
+  const myTransfer = purchase && !purchase.is_me && share !== null && (
+    <div className="mt-3 rounded-[14px] bg-fill px-3 py-2.5" data-my-share={share}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[14px]">Ваша часть</span>
+        <b className="tabular text-[19px]">{formatMoney(share)}</b>
+      </div>
+      {share < pledge && (
+        <p className="mt-0.5 text-[12px] leading-snug text-hint">
+          Подарки стоят {formatMoney(purchase.cost)} — меньше, чем собрали, поэтому каждый платит пропорционально
+          своему взносу
+        </p>
+      )}
+      {purchase.transferred ? (
+        <div className="mt-2 flex items-center justify-between gap-2 text-[14px]">
+          <span className="flex items-center gap-1 font-semibold text-success">
+            <Check size={15} strokeWidth={3} /> Вы перевели свою часть
+          </span>
+          <button onClick={() => onTransfer(false)} disabled={busy} className="text-[13px] text-hint">
+            Отменить
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => onTransfer(true)}
+          disabled={busy}
+          data-transfer
+          className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-[12px] bg-accent text-[15px] font-semibold text-accent-text"
+        >
+          {spinner ?? '💸 Я перевёл(а) свою часть'}
+        </button>
+      )}
+      {purchase.transfers_total ? (
+        <div className="mt-1.5 text-center text-[12px] text-hint">
+          Перевели {purchase.transfers_done ?? 0} из {purchase.transfers_total}
+        </div>
+      ) : null}
+    </div>
+  );
+
+  // покупателю — кто уже перевёл, без сумм
+  const buyerTransfers = purchase?.is_me && purchase.transfers && (
+    <div className="mt-3" data-transfers>
+      <p className="text-[13px] leading-snug text-hint">
+        Подарки стоят {formatMoney(purchase.cost)}, ваша часть — {formatMoney(share ?? 0)}. Остальное переведут
+        участники: сколько — каждый видит сам
+      </p>
+      {purchase.transfers.length > 0 && (
+        <div className="mt-2 overflow-hidden rounded-[14px] bg-fill">
+          {purchase.transfers.map((t, i) => (
+            <div
+              key={t.id}
+              className={`flex items-center gap-2.5 px-3 py-2 ${i ? 'border-t border-separator' : ''}`}
+              data-transfer-row={t.first_name}
+            >
+              <Avatar user={t} size={28} />
+              <span className="min-w-0 flex-1 truncate text-[14px]">{t.first_name}</span>
+              {t.done ? (
+                <span className="text-[13px] font-semibold text-success">✓ перевёл(а)</span>
+              ) : (
+                <span className="text-[13px] text-hint">ждём перевод</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const writeBuyer = buyer?.username && !purchase?.is_me && (
+    <button
+      onClick={() => openTelegramLink(`https://t.me/${buyer.username}`)}
+      className="mt-2 text-[14px] font-medium text-link"
+    >
+      💬 Написать покупателю
+    </button>
+  );
 
   if (purchase?.status === 'bought') {
     return (
@@ -869,6 +975,9 @@ function PurchaseCard({
           {gifts}
           {buyer && !purchase.is_me && <span className="text-hint"> · купил(а) {buyer.first_name}</span>}
         </p>
+        {myTransfer}
+        {buyerTransfers}
+        {!purchase.transferred && writeBuyer}
         {purchase.is_me && (
           <button
             onClick={() => onAction('reopen')}
@@ -896,9 +1005,7 @@ function PurchaseCard({
         </div>
         {purchase.is_me ? (
           <>
-            <p className="mt-2 text-[13px] leading-snug text-hint">
-              Соберите переводы от участников в чате сбора и отметьте, когда подарок куплен
-            </p>
+            {buyerTransfers}
             <div className="mt-3 flex gap-2">
               <button
                 onClick={() => onAction('bought')}
@@ -919,17 +1026,8 @@ function PurchaseCard({
           </>
         ) : (
           <>
-            <p className="mt-2 text-[14px] leading-snug">
-              Переведите свою часть {buyer?.first_name ?? 'покупателю'} — договоритесь в чате сбора
-            </p>
-            {buyer?.username && (
-              <button
-                onClick={() => openTelegramLink(`https://t.me/${buyer.username}`)}
-                className="mt-2 text-[14px] font-medium text-link"
-              >
-                Написать {buyer.first_name}
-              </button>
-            )}
+            {myTransfer}
+            {writeBuyer}
           </>
         )}
       </div>
@@ -1053,7 +1151,7 @@ function PoolTeam({
   const setEditing = (on: boolean) => setEditingLink(on && chat ? chat.link : null);
   const [manual, setManual] = useState(false);
   const [link, setLink] = useState('');
-  const [canPm, setCanPm] = useState(allowsWriteToPm);
+  const [canPm, setCanPm] = useState(botCanWrite);
   const usernames = supporters.filter((s) => !s.is_me && s.username).map((s) => `@${s.username}`);
   const showSetup = !chat || editing;
 
@@ -1071,7 +1169,7 @@ function PoolTeam({
   };
 
   const allowPm = async () => {
-    const granted = await requestWriteAccess();
+    const granted = await enableBotMessages();
     setCanPm(granted);
     toast(granted ? 'Готово — бот пришлёт приглашение, когда появится чат сбора' : 'Без разрешения бот не сможет написать вам', granted ? 'success' : 'info');
   };

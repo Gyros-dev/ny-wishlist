@@ -273,6 +273,19 @@ create table if not exists app.reservations (
 
 create index if not exists reservations_reserver_idx on app.reservations (room_id, reserver_id);
 
+-- «Я перевёл»: участник сбора отмечает, что перевёл покупателю свою часть.
+-- Сумм тут нет — покупатель видит только, кто уже перевёл. Пропадает вместе
+-- со взносом.
+create table if not exists app.pool_transfers (
+  room_id uuid not null,
+  recipient_id bigint not null,
+  giver_id bigint not null,
+  created_at timestamptz not null default now(),
+  primary key (room_id, recipient_id, giver_id),
+  foreign key (room_id, giver_id, recipient_id)
+    references app.pledges (room_id, giver_id, recipient_id) on delete cascade
+);
+
 -- День рождения: только день и месяц, год не нужен. Один на все компании.
 alter table app.users add column if not exists birthday_month smallint;
 alter table app.users add column if not exists birthday_day smallint;
@@ -310,6 +323,7 @@ alter table app.pool_purchases enable row level security;
 alter table app.notifications enable row level security;
 alter table app.santa enable row level security;
 alter table app.santa_members enable row level security;
+alter table app.pool_transfers enable row level security;
 
 -- ---------------------------------------------------------------------------
 -- Проверка Telegram initData
@@ -524,6 +538,33 @@ as $$
     where vt.room_id = p_room_id and vt.recipient_id = p_recipient_id
       and not exists (select 1 from app.reservations rv where rv.gift_id = vt.gift_id)
   ) v;
+$$;
+
+-- Сколько участнику перевести покупателю: взнос — это «сколько готов
+-- потратить», а выбранное может стоить меньше собранного. Поэтому каждый
+-- платит пропорционально своему взносу, с округлением вверх (покупатель не
+-- останется в минусе) и не больше самого взноса. null — покупки нет или
+-- участник не в сборе.
+create or replace function app.pool_share(p_room_id uuid, p_recipient_id bigint, p_giver_id bigint)
+returns bigint
+language sql
+stable
+set search_path = ''
+as $$
+  select case when pl.amount is null or t.total = 0 then null
+    else least(pl.amount, ceil(pl.amount::numeric * c.cost / t.total))::bigint
+  end
+  from app.pool_purchases pp
+  cross join lateral (
+    select coalesce(sum(g.price), 0) as cost from app.gifts g where g.id = any (pp.gift_ids)
+  ) c
+  cross join lateral (
+    select coalesce(sum(p.amount), 0) as total from app.pledges p
+    where p.room_id = pp.room_id and p.recipient_id = pp.recipient_id
+  ) t
+  left join app.pledges pl
+    on pl.room_id = pp.room_id and pl.recipient_id = pp.recipient_id and pl.giver_id = p_giver_id
+  where pp.room_id = p_room_id and pp.recipient_id = p_recipient_id;
 $$;
 
 -- Подарки общего сбора, на которые уже хватает
@@ -878,7 +919,28 @@ as $$
         'gifts', coalesce((
           select jsonb_agg(jsonb_build_object('id', g.id, 'emoji', g.emoji, 'title', g.title) order by g.price)
           from app.gifts g where g.id = any (pc.gift_ids)
-        ), '[]'::jsonb)
+        ), '[]'::jsonb),
+        -- сколько стоит выбранное (это сумма цен из списка — не секрет)
+        'cost', (select coalesce(sum(g.price), 0) from app.gifts g where g.id = any (pc.gift_ids)),
+        -- сколько перевести мне — видно только мне самому
+        'my_share', case when pool.i_support then app.pool_share(p_room_id, p_friend, p_me) end,
+        'transferred', exists (
+          select 1 from app.pool_transfers t
+          where t.room_id = p_room_id and t.recipient_id = p_friend and t.giver_id = p_me
+        ),
+        -- кто уже перевёл — только покупателю и без сумм
+        'transfers', case when pc.buyer_id = p_me then coalesce((
+          select jsonb_agg(app.user_json(u) || jsonb_build_object('done', t.giver_id is not null) order by p.created_at, u.id)
+          from app.pledges p
+          join app.users u on u.id = p.giver_id
+          left join app.pool_transfers t
+            on t.room_id = p.room_id and t.recipient_id = p.recipient_id and t.giver_id = p.giver_id
+          where p.room_id = p_room_id and p.recipient_id = p_friend and p.giver_id <> p_me
+        ), '[]'::jsonb) end,
+        'transfers_done', case when pool.i_support then (
+          select count(*) from app.pool_transfers t where t.room_id = p_room_id and t.recipient_id = p_friend
+        ) end,
+        'transfers_total', case when pool.i_support then pool.supporters - 1 end
       )
       from purchase pc
     ),
@@ -995,6 +1057,19 @@ begin
             where pp.room_id = m.room_id and pp.recipient_id = u.id
           ),
           'my_pledge', mine.amount,
+          -- покупку взял кто-то другой, а я ещё не отметил «перевёл»
+          'transfer_due', (
+            select jsonb_build_object('amount', app.pool_share(m.room_id, u.id, v_me), 'buyer', b.first_name)
+            from app.pool_purchases pp
+            join app.users b on b.id = pp.buyer_id
+            where pp.room_id = m.room_id and pp.recipient_id = u.id
+              and pp.buyer_id <> v_me
+              and mine.amount is not null
+              and not exists (
+                select 1 from app.pool_transfers t
+                where t.room_id = m.room_id and t.recipient_id = u.id and t.giver_id = v_me
+              )
+          ),
           'picked', coalesce((
             select jsonb_agg(jsonb_build_object('id', pg.id, 'emoji', pg.emoji, 'title', pg.title) order by pg.price)
             from app.gifts pg
@@ -1649,7 +1724,7 @@ begin
     on conflict (room_id, recipient_id) do update
       set gift_ids = excluded.gift_ids, status = 'buying', updated_at = now();
     perform app.notify_pool(p_room_id, p_friend_id, v_me, format(
-      '🛍 %s берёт на себя покупку (кому: %s): %s. Договоритесь в чате сбора, как скинуться',
+      '🛍 %s берёт на себя покупку (кому: %s): %s. Сколько перевести вам — в приложении',
       v_me_name, v_friend_name, app.gift_titles(v_gifts)
     ));
   elsif p_action in ('release', 'bought', 'reopen') then
@@ -1658,6 +1733,8 @@ begin
     end if;
     if p_action = 'release' then
       delete from app.pool_purchases pp where pp.room_id = p_room_id and pp.recipient_id = p_friend_id;
+      -- переводили прошлому покупателю — у нового отметки начинаются с нуля
+      delete from app.pool_transfers t where t.room_id = p_room_id and t.recipient_id = p_friend_id;
       perform app.notify_pool(p_room_id, p_friend_id, v_me, format(
         '↩️ %s больше не покупает подарок (кому: %s) — кто-то может взять покупку на себя', v_me_name, v_friend_name
       ));
@@ -1673,6 +1750,54 @@ begin
     end if;
   else
     raise exception 'Неизвестное действие';
+  end if;
+
+  return app.friend_payload(p_room_id, v_me, p_friend_id);
+end;
+$$;
+
+-- «Я перевёл свою часть покупателю» или снять отметку
+create or replace function public.wl_mark_transfer(p_init_data text, p_room_id uuid, p_friend_id bigint, p_done boolean)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_me bigint := app.auth(p_init_data);
+  v_purchase app.pool_purchases;
+begin
+  perform app.require_member(p_room_id, v_me);
+  if not exists (
+    select 1 from app.pledges p
+    where p.room_id = p_room_id and p.giver_id = v_me and p.recipient_id = p_friend_id
+  ) then
+    raise exception 'Отметить перевод могут участники сбора';
+  end if;
+  select pp.* into v_purchase from app.pool_purchases pp
+  where pp.room_id = p_room_id and pp.recipient_id = p_friend_id;
+  if v_purchase.room_id is null then
+    raise exception 'Пока никто не взял покупку на себя';
+  end if;
+  if v_purchase.buyer_id = v_me then
+    raise exception 'Покупаете вы — переводить никому не нужно';
+  end if;
+
+  if coalesce(p_done, true) then
+    insert into app.pool_transfers (room_id, recipient_id, giver_id)
+    values (p_room_id, p_friend_id, v_me)
+    on conflict do nothing;
+    if found then
+      perform app.notify(v_purchase.buyer_id, format(
+        '💸 %s перевёл(а) свою часть (кому: %s)',
+        (select u.first_name from app.users u where u.id = v_me),
+        (select u.first_name from app.users u where u.id = p_friend_id)
+      ));
+    end if;
+  else
+    delete from app.pool_transfers t
+    where t.room_id = p_room_id and t.recipient_id = p_friend_id and t.giver_id = v_me;
   end if;
 
   return app.friend_payload(p_room_id, v_me, p_friend_id);
@@ -1871,11 +1996,67 @@ $$;
 -- ежедневно через pg_cron (ниже).
 -- ---------------------------------------------------------------------------
 
--- Через неделю после дня рождения сбор закрывается, чтобы к следующему году
--- он начался с нуля: купленное сбором и забронированное отмечается
--- подаренным, взносы, голоса, покупка и чат сбора удаляются. Если покупку
--- ещё делают, ждём до 30 дней. Трогаем только то, что появилось до дня
--- рождения, — сбор к следующему празднику остаётся.
+-- Закрыть сбор к прошедшему празднику p_holiday, чтобы следующий начался с
+-- нуля: купленное сбором и забронированное отмечается подаренным, взносы,
+-- голоса, отметки «перевёл», покупка и чат сбора удаляются. Трогаем только
+-- то, что появилось до праздника (включительно), — сбор к следующему остаётся.
+create or replace function app.close_pool(p_room_id uuid, p_recipient_id bigint, p_holiday date, p_greeting text)
+returns boolean
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_cutoff timestamptz := (p_holiday + 1)::timestamptz;
+  v_purchase app.pool_purchases;
+  v_given uuid[] := '{}';
+  v_reserved uuid[];
+  v_did boolean := false;
+begin
+  -- сбор, начатый до праздника, — закрываем целиком
+  if exists (
+    select 1 from app.pledges p
+    where p.room_id = p_room_id and p.recipient_id = p_recipient_id and p.created_at < v_cutoff
+  ) then
+    select pp.* into v_purchase from app.pool_purchases pp
+    where pp.room_id = p_room_id and pp.recipient_id = p_recipient_id;
+    if v_purchase.status = 'bought' then
+      v_given := v_purchase.gift_ids;
+    end if;
+    delete from app.pool_purchases pp where pp.room_id = p_room_id and pp.recipient_id = p_recipient_id;
+    delete from app.votes v where v.room_id = p_room_id and v.recipient_id = p_recipient_id;
+    delete from app.pledges p where p.room_id = p_room_id and p.recipient_id = p_recipient_id;
+    delete from app.pool_chats c where c.room_id = p_room_id and c.recipient_id = p_recipient_id;
+    delete from app.pool_chat_requests c where c.room_id = p_room_id and c.recipient_id = p_recipient_id;
+    v_did := true;
+  end if;
+
+  -- брони к прошедшему празднику — подарки уже подарены
+  with gone as (
+    delete from app.reservations rv
+    where rv.room_id = p_room_id and rv.owner_id = p_recipient_id and rv.created_at < v_cutoff
+    returning rv.gift_id
+  )
+  select coalesce(array_agg(gone.gift_id), '{}') into v_reserved from gone;
+  if cardinality(v_reserved) > 0 then
+    v_given := v_given || v_reserved;
+    v_did := true;
+  end if;
+
+  if cardinality(v_given) > 0 then
+    update app.gifts g set received_at = coalesce(g.received_at, now())
+     where g.id = any (v_given) and g.owner_id = p_recipient_id;
+    perform app.notify(p_recipient_id, format(
+      '%s В «%s» отметили подаренным: %s. Если что-то не так — верните подарок в вишлист',
+      p_greeting, (select ro.name from app.rooms ro where ro.id = p_room_id), app.gift_titles(v_given)
+    ));
+  end if;
+  return v_did;
+end;
+$$;
+
+-- Дни рождения: через неделю после праздника сбор закрывается. Если покупку
+-- ещё делают, ждём до 30 дней.
 create or replace function app.close_birthday_pools(p_today date)
 returns integer
 language plpgsql
@@ -1884,66 +2065,57 @@ set search_path = ''
 as $$
 declare
   v_closed integer := 0;
-  v_cutoff timestamptz;
-  v_given uuid[];
-  v_reserved uuid[];
-  v_did boolean;
   r record;
 begin
   for r in
-    select m.room_id, ro.name as room_name, u.id as user_id,
+    select m.room_id, u.id as user_id,
            app.last_birthday(u.birthday_month, u.birthday_day, p_today) as bday,
-           pp.status, pp.gift_ids
+           pp.status
     from app.room_members m
     join app.rooms ro on ro.id = m.room_id and ro.occasion = 'birthdays'
     join app.users u on u.id = m.user_id and u.birthday_month is not null
     left join app.pool_purchases pp on pp.room_id = m.room_id and pp.recipient_id = m.user_id
   loop
     continue when p_today - r.bday < 7 or (r.status = 'buying' and p_today - r.bday < 30);
-    v_cutoff := (r.bday + 1)::timestamptz;
-    v_given := '{}';
-    v_did := false;
-
-    -- сбор, начатый до дня рождения, — закрываем целиком
-    if exists (
-      select 1 from app.pledges p
-      where p.room_id = r.room_id and p.recipient_id = r.user_id and p.created_at < v_cutoff
-    ) then
-      if r.status = 'bought' then
-        v_given := r.gift_ids;
-      end if;
-      delete from app.pool_purchases pp where pp.room_id = r.room_id and pp.recipient_id = r.user_id;
-      delete from app.votes v where v.room_id = r.room_id and v.recipient_id = r.user_id;
-      delete from app.pledges p where p.room_id = r.room_id and p.recipient_id = r.user_id;
-      delete from app.pool_chats c where c.room_id = r.room_id and c.recipient_id = r.user_id;
-      delete from app.pool_chat_requests c where c.room_id = r.room_id and c.recipient_id = r.user_id;
-      v_did := true;
-    end if;
-
-    -- брони к прошедшему дню рождения — подарки уже подарены
-    with gone as (
-      delete from app.reservations rv
-      where rv.room_id = r.room_id and rv.owner_id = r.user_id and rv.created_at < v_cutoff
-      returning rv.gift_id
-    )
-    select coalesce(array_agg(gone.gift_id), '{}') into v_reserved from gone;
-    if cardinality(v_reserved) > 0 then
-      v_given := v_given || v_reserved;
-      v_did := true;
-    end if;
-
-    if cardinality(v_given) > 0 then
-      update app.gifts g set received_at = coalesce(g.received_at, now())
-       where g.id = any (v_given) and g.owner_id = r.user_id;
-      perform app.notify(r.user_id, format(
-        '🎂 Надеемся, день рождения удался! В «%s» отметили подаренным: %s. Если что-то не так — верните подарок в вишлист',
-        r.room_name, app.gift_titles(v_given)
-      ));
-    end if;
-    if v_did then
+    if app.close_pool(r.room_id, r.user_id, r.bday, '🎂 Надеемся, день рождения удался!') then
       v_closed := v_closed + 1;
     end if;
   end loop;
+  return v_closed;
+end;
+$$;
+
+-- Новый год: с 8 января сборы прошлого праздника закрываются (если покупку
+-- ещё делают — с 31 января), а Тайный Санта прошлого года убирается.
+create or replace function app.close_new_year_pools(p_today date)
+returns integer
+language plpgsql
+volatile
+set search_path = ''
+as $$
+declare
+  v_holiday date := make_date(extract(year from p_today)::integer, 1, 1);
+  v_closed integer := 0;
+  r record;
+begin
+  if p_today - v_holiday < 7 then
+    return 0;
+  end if;
+  for r in
+    select m.room_id, m.user_id, pp.status
+    from app.room_members m
+    join app.rooms ro on ro.id = m.room_id and ro.occasion = 'new_year'
+    left join app.pool_purchases pp on pp.room_id = m.room_id and pp.recipient_id = m.user_id
+  loop
+    continue when r.status = 'buying' and p_today - v_holiday < 30;
+    if app.close_pool(r.room_id, r.user_id, v_holiday, '🎄 С Новым годом!') then
+      v_closed := v_closed + 1;
+    end if;
+  end loop;
+
+  delete from app.santa sa
+  using app.rooms ro
+  where ro.id = sa.room_id and ro.occasion = 'new_year' and sa.created_at < (v_holiday + 1)::timestamptz;
   return v_closed;
 end;
 $$;
@@ -2038,6 +2210,7 @@ begin
   v_today := coalesce(p_today, (now() at time zone v_tz)::date);
 
   perform app.close_birthday_pools(v_today);
+  perform app.close_new_year_pools(v_today);
   v_sent := app.birthday_reminders(v_today);
 
   v_days := make_date(extract(year from v_today)::integer + 1, 1, 1) - v_today;

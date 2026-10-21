@@ -93,8 +93,13 @@ export async function startApi({ port = 54321, latencyMs = 120, seed = true, log
         const user = PERSONAS[url.searchParams.get('user')];
         if (!user) return send(res, 404, { message: 'unknown persona' });
         const start = url.searchParams.get('start');
-        // start_param, как и у Telegram, входит в подписанные данные
-        return send(res, 200, { user, initData: signInitData(user, { extra: start ? { start_param: start } : {} }) });
+        // start_param, как и у Telegram, входит в подписанные данные;
+        // pm=0 — человек не запускал бота и не разрешал ему писать
+        const initData = signInitData(user, {
+          extra: start ? { start_param: start } : {},
+          allowsWriteToPm: url.searchParams.get('pm') !== '0',
+        });
+        return send(res, 200, { user, initData });
       }
       if (url.pathname === '/__dev/reset' && req.method === 'POST') {
         await db.close();

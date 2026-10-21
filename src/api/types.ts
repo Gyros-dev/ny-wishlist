@@ -68,6 +68,8 @@ export interface Member extends Person {
   together_next_missing: number | null;
   purchase_status: 'buying' | 'bought' | null;
   my_pledge: number | null;
+  /** покупку взял кто-то другой, а я ещё не отметил «перевёл»: сколько и кому */
+  transfer_due: { amount: number; buyer: string } | null;
   /** итоговый набор по голосам — что покупаем */
   picked: { id: string; emoji: string; title: string }[];
 }
@@ -140,6 +142,16 @@ export interface FriendPayload {
     buyer: User | null;
     is_me: boolean;
     gifts: { id: string; emoji: string; title: string }[];
+    /** сколько стоит выбранное */
+    cost: number;
+    /** сколько перевести мне: пропорционально взносу; null — я не в сборе */
+    my_share: number | null;
+    /** я отметил «перевёл» */
+    transferred: boolean;
+    /** кто уже перевёл — только покупателю, без сумм */
+    transfers: (User & { done: boolean })[] | null;
+    transfers_done: number | null;
+    transfers_total: number | null;
   } | null;
   /** по возрастанию цены */
   gifts: FriendGift[];

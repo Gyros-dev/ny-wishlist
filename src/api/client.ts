@@ -129,6 +129,10 @@ export const api = {
     rpc<FriendPayload>('wl_pool_purchase', { p_room_id: roomId, p_friend_id: friendId, p_action: action }),
 
   /** Тайный Санта: open (с бюджетом) | join | leave | draw | cancel */
+  /** «я перевёл свою часть покупателю» или снять отметку */
+  markTransfer: (roomId: string, friendId: number, done: boolean) =>
+    rpc<FriendPayload>('wl_mark_transfer', { p_room_id: roomId, p_friend_id: friendId, p_done: done }),
+
   santa: (roomId: string, action: 'open' | 'join' | 'leave' | 'draw' | 'cancel', budget: number | null = null) =>
     rpc<SantaState | null>('wl_santa', { p_room_id: roomId, p_action: action, p_budget: budget }),
 

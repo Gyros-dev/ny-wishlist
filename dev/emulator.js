@@ -12,6 +12,8 @@ const API = params.get('api') ?? 'http://localhost:54321';
 const demo = params.has('demo');
 // Полноэкранный режим Telegram (Bot API 8.0): без шапки, с плавающими кнопками
 const fullscreen = params.has('fullscreen');
+// &nopm=1 — пользователи ещё не разрешали боту писать им в личку
+const noPm = params.has('nopm');
 // Отступы, которые iOS-клиент сообщает в полноэкранном режиме
 const FULLSCREEN_SAFE_AREA = { top: 50, bottom: 0, left: 0, right: 0 };
 const FULLSCREEN_CONTENT_SAFE_AREA = { top: 46, bottom: 0, left: 0, right: 0 };
@@ -310,7 +312,7 @@ class Phone {
     this.setMainButton({ is_visible: false });
     this.setBack(false);
     const res = await fetch(
-      `${API}/__dev/init-data?user=${this.userId}${startParam ? `&start=${encodeURIComponent(startParam)}` : ''}`,
+      `${API}/__dev/init-data?user=${this.userId}${startParam ? `&start=${encodeURIComponent(startParam)}` : ''}${noPm ? '&pm=0' : ''}`,
     );
     const { initData } = await res.json();
     const hash = new URLSearchParams({

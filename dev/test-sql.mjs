@@ -867,3 +867,99 @@ describe('дни рождения', () => {
     assert.equal(await pool(), 1);
   });
 });
+
+describe('сколько переводить покупателю', () => {
+  let room;
+  const gifts = {};
+  const friend = (id) => rpc('wl_friend', { p_init_data: as(id), p_room_id: room.id, p_friend_id: 1003 });
+  const purchase = (id, action) => rpc('wl_pool_purchase', { p_init_data: as(id), p_room_id: room.id, p_friend_id: 1003, p_action: action });
+  const mark = (id, done) => rpc('wl_mark_transfer', { p_init_data: as(id), p_room_id: room.id, p_friend_id: 1003, p_done: done });
+
+  before(async () => {
+    room = await rpc('wl_create_room', { p_init_data: as(1002), p_name: 'Переводы', p_currency: 'RUB', p_occasion: 'new_year' });
+    for (const id of [1003, 1004, 1005]) await rpc('wl_join_room', { p_init_data: as(id), p_invite_code: room.invite_code });
+    for (const [title, price] of [['Сумка', 1500], ['Шарф', 900]]) {
+      gifts[title] = await rpc('wl_save_gift', {
+        p_init_data: as(1003), p_room_id: room.id, p_gift_id: null, p_title: title, p_price: price, p_emoji: null, p_link: null,
+      });
+    }
+    for (const [id, amount] of [[1002, 1000], [1004, 800]]) {
+      await rpc('wl_set_pledge', { p_init_data: as(id), p_room_id: room.id, p_friend_id: 1003, p_amount: amount });
+      await rpc('wl_vote', { p_init_data: as(id), p_room_id: room.id, p_friend_id: 1003, p_gift_id: gifts['Сумка'].id, p_on: true });
+    }
+    await purchase(1002, 'take');
+  });
+
+  test('каждый платит пропорционально взносу, с округлением вверх', async () => {
+    // собрали 1800, сумка стоит 1500: Катя 800 × 1500 / 1800 = 666,67 → 667
+    const katya = (await friend(1004)).purchase;
+    assert.equal(katya.cost, 1500);
+    assert.equal(katya.my_share, 667);
+    assert.equal(katya.transferred, false);
+    assert.equal(katya.transfers, null, 'список переводов видит только покупатель');
+    assert.deepEqual([katya.transfers_done, katya.transfers_total], [0, 1]);
+    const misha = (await friend(1002)).purchase;
+    assert.equal(misha.my_share, 834);
+    assert.deepEqual(misha.transfers.map((t) => [t.first_name, t.done]), [['Катя', false]]);
+    const max = (await friend(1005)).purchase;
+    assert.equal(max.my_share, null, 'не участнику сбора — ничего');
+    assert.equal(max.transfers_done, null);
+
+    const due = (await rpc('wl_bootstrap', { p_init_data: as(1004), p_room_id: room.id })).members.find((m) => m.id === 1003).transfer_due;
+    assert.deepEqual(due, { amount: 667, buyer: 'Миша' });
+    const own = (await rpc('wl_bootstrap', { p_init_data: as(1002), p_room_id: room.id })).members.find((m) => m.id === 1003).transfer_due;
+    assert.equal(own, null, 'покупателю переводить некому');
+  });
+
+  test('«я перевёл»: покупатель видит отметку и получает сообщение', async () => {
+    await rejects(mark(1002, true), { message: /Покупаете вы/ });
+    await rejects(mark(1005, true), { message: /участники сбора/ });
+    await db.query('delete from app.notifications');
+    const res = await mark(1004, true);
+    assert.equal(res.purchase.transferred, true);
+    const { rows } = await db.query('select text from app.notifications where user_id = 1002');
+    assert.match(rows[0].text, /Катя перевёл\(а\) свою часть \(кому: Оля\)/);
+    assert.deepEqual((await friend(1002)).purchase.transfers.map((t) => t.done), [true]);
+    const members = (await rpc('wl_bootstrap', { p_init_data: as(1004), p_room_id: room.id })).members;
+    assert.equal(members.find((m) => m.id === 1003).transfer_due, null);
+
+    await mark(1004, false);
+    assert.equal((await friend(1004)).purchase.transferred, false);
+  });
+
+  test('если покупатель отказался, отметки начинаются с нуля', async () => {
+    await mark(1004, true);
+    await purchase(1002, 'release');
+    await purchase(1004, 'take');
+    const misha = (await friend(1002)).purchase;
+    assert.equal(misha.transferred, false);
+    assert.equal(misha.my_share, 834);
+    await purchase(1004, 'release');
+    await purchase(1002, 'take');
+  });
+
+  test('после Нового года сбор и Тайный Санта прошлого года закрываются', async () => {
+    await rpc('wl_reserve_gift', { p_init_data: as(1005), p_room_id: room.id, p_gift_id: gifts['Шарф'].id, p_reserve: true });
+    await purchase(1002, 'bought');
+    await rpc('wl_santa', { p_init_data: as(1002), p_room_id: room.id, p_action: 'open', p_budget: null });
+    for (const table of ['pledges', 'reservations', 'santa']) {
+      await db.query(`update app.${table} set created_at = '2026-12-20' where room_id = $1`, [room.id]);
+    }
+    const left = async () =>
+      (await db.query(
+        `select (select count(*) from app.pledges where room_id = $1)::int as pledges,
+                (select count(*) from app.santa where room_id = $1)::int as santa`,
+        [room.id],
+      )).rows[0];
+
+    await db.query("select app.daily_reminders('2027-01-05')");
+    assert.deepEqual(await left(), { pledges: 2, santa: 1 }, 'праздники ещё идут');
+    await db.query('delete from app.notifications');
+    await db.query("select app.daily_reminders('2027-01-08')");
+    assert.deepEqual(await left(), { pledges: 0, santa: 0 });
+    const mine = (await rpc('wl_bootstrap', { p_init_data: as(1003), p_room_id: room.id })).gifts;
+    assert.ok(mine.every((g) => g.received), 'сумка куплена сбором, шарф забронирован — оба подарены');
+    const { rows } = await db.query('select text from app.notifications where user_id = 1003');
+    assert.match(rows[0].text, /С Новым годом! В «Переводы» отметили подаренным: .*Шарф.*Сумка/);
+  });
+});

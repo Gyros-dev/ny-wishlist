@@ -1,5 +1,5 @@
-import { ChevronRight, ExternalLink, UserPlus } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { BellRing, ChevronRight, ExternalLink, UserPlus, X } from 'lucide-react';
+import { type ReactNode, useEffect, useState } from 'react';
 import type { Bootstrap, Gift, Member, Person, Room, User } from '../api/types';
 import { Avatar } from '../components/Avatar';
 import { GiftThumb } from '../components/GiftThumb';
@@ -7,7 +7,9 @@ import { Hero, type NextBirthday } from '../components/Hero';
 import { ProgressPills } from '../components/ProgressBar';
 import { SantaCard } from '../components/SantaCard';
 import { Segmented } from '../components/Segmented';
+import { toast } from '../components/Toast';
 import { Layer, useMainButton } from '../telegram/buttons';
+import { dismissBotMessages, enableBotMessages, onBotMessagesChange, shouldOfferBotMessages } from '../telegram/webapp';
 import { daysUntilBirthday, formatBirthday, inDaysText, parseBirthday } from '../utils/birthday';
 import { currencySymbol, formatMoney, fullName, linkHost, pluralize } from '../utils/format';
 
@@ -85,6 +87,7 @@ export function HomeScreen({
           occasion={room.occasion}
           nextBirthday={birthdays ? nearestBirthday(boot.me, boot.members) : null}
         />
+        <BotMessagesBanner birthdays={birthdays} />
         <Segmented<HomeTab>
           value={tab}
           onChange={onTab}
@@ -116,6 +119,43 @@ export function HomeScreen({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Один раз предложить разрешить боту писать — иначе напоминания не дойдут */
+function BotMessagesBanner({ birthdays }: { birthdays: boolean }) {
+  const [show, setShow] = useState(shouldOfferBotMessages);
+  useEffect(() => onBotMessagesChange(() => setShow(shouldOfferBotMessages())), []);
+  if (!show) return null;
+
+  const allow = async () => {
+    const granted = await enableBotMessages();
+    toast(
+      granted ? 'Готово — бот будет присылать напоминания' : 'Без разрешения бот не сможет написать вам',
+      granted ? 'success' : 'info',
+    );
+  };
+
+  return (
+    <div className="flex items-start gap-3 rounded-[16px] bg-accent/10 py-3 pr-2 pl-4" data-bot-messages>
+      <BellRing size={22} className="mt-0.5 shrink-0 text-accent" />
+      <div className="min-w-0 flex-1">
+        <div className="text-[15px] font-semibold">Включите напоминания</div>
+        <div className="text-[13px] leading-snug text-hint">
+          Бот напишет {birthdays ? 'перед днями рождения' : 'перед Новым годом'} и когда кто-то покупает подарок
+        </div>
+        <button
+          onClick={() => void allow()}
+          data-bot-messages-allow
+          className="mt-2 rounded-full bg-accent px-4 py-1.5 text-[14px] font-semibold text-accent-text transition active:scale-95"
+        >
+          Разрешить
+        </button>
+      </div>
+      <button onClick={dismissBotMessages} aria-label="Не сейчас" className="shrink-0 p-1 text-hint">
+        <X size={18} />
+      </button>
     </div>
   );
 }
@@ -381,6 +421,11 @@ function MemberCard({ member: m, birthdays, onClick }: { member: Member; birthda
 
       {(m.my_pledge || m.picked.length > 0 || m.my_reserved_count > 0 || m.purchase_status === 'buying') && (
         <div className="mt-3 flex flex-wrap gap-1.5">
+          {m.transfer_due && (
+            <span className="tabular rounded-full bg-accent px-2.5 py-1 text-[13px] font-semibold text-accent-text" data-transfer-due>
+              💸 Перевести {formatMoney(m.transfer_due.amount)} · покупает {m.transfer_due.buyer}
+            </span>
+          )}
           {m.purchase_status === 'buying' && (
             <span className="rounded-full bg-success/15 px-2.5 py-1 text-[13px] font-semibold text-success">
               🛍 Подарок уже покупают

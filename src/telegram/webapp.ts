@@ -137,6 +137,55 @@ export function requestWriteAccess(): Promise<boolean> {
   });
 }
 
+// Без разрешения бот не может написать человеку, который не запускал его
+// сам, — напоминания и приглашения в чат сбора до него не дойдут. Поэтому
+// спрашиваем один раз в подходящий момент и запоминаем ответ на устройстве.
+const PM_KEY = 'wl:bot-messages';
+type PmAnswer = 'granted' | 'asked' | 'dismissed';
+const pmListeners = new Set<() => void>();
+
+function readPm(): PmAnswer | null {
+  try {
+    return localStorage.getItem(PM_KEY) as PmAnswer | null;
+  } catch {
+    return null;
+  }
+}
+
+function writePm(answer: PmAnswer) {
+  try {
+    localStorage.setItem(PM_KEY, answer);
+  } catch {
+    // без хранилища спросим ещё раз — не страшно
+  }
+  pmListeners.forEach((fn) => fn());
+}
+
+/** Может ли бот писать в личку: разрешили до запуска или уже в приложении */
+export const botCanWrite = (): boolean => allowsWriteToPm() || readPm() === 'granted';
+
+/** Предложить разрешение: ещё ни разу не спрашивали и не скрывали */
+export const shouldOfferBotMessages = (): boolean => isTelegram && atLeast('6.9') && !botCanWrite() && readPm() === null;
+
+export function onBotMessagesChange(fn: () => void): () => void {
+  pmListeners.add(fn);
+  return () => pmListeners.delete(fn);
+}
+
+/** Спросить разрешение (системное окно Telegram) и запомнить ответ */
+export async function enableBotMessages(): Promise<boolean> {
+  const granted = await requestWriteAccess();
+  writePm(granted ? 'granted' : 'asked');
+  return granted;
+}
+
+/** Спросить, только если ещё не спрашивали: вступили в компанию, скинулись, указали день рождения */
+export async function askBotMessagesOnce(): Promise<void> {
+  if (shouldOfferBotMessages()) await enableBotMessages();
+}
+
+export const dismissBotMessages = () => writePm('dismissed');
+
 export function closeApp() {
   try {
     tg?.close();

@@ -10,7 +10,7 @@ import { GiftEditor } from './screens/GiftEditor';
 import { HomeScreen, HomeSkeleton, type HomeTab, type RoomBootstrap } from './screens/HomeScreen';
 import { CreateRoomSheet, JoinScreen, Onboarding, RoomsSheet } from './screens/RoomScreens';
 import { Layer, useBackButton } from './telegram/buttons';
-import { closeApp, confirmAction, isTelegram, startParam } from './telegram/webapp';
+import { askBotMessagesOnce, closeApp, confirmAction, isTelegram, startParam } from './telegram/webapp';
 import { setCurrency } from './utils/format';
 import { appLink, inviteCodeFromStartParam, inviteLink, shareToTelegram } from './utils/share';
 
@@ -134,6 +134,7 @@ function WishlistApp() {
       setInvite(null);
       await load(joined.id);
       toast(`Вы в компании «${joined.name}»!`, 'success');
+      void askBotMessagesOnce();
     } catch (err) {
       toast(errorMessage(err), 'error');
     } finally {
@@ -162,6 +163,7 @@ function WishlistApp() {
     await load(created.id);
     setTab('friends');
     toast('Компания создана — пригласите друзей', 'success');
+    void askBotMessagesOnce();
   };
 
   const switchRoom = (roomId: string) => {
@@ -209,6 +211,7 @@ function WishlistApp() {
       setBoot((b) => b && { ...b, me: { ...b.me, birthday: me.birthday ?? null } });
       setBirthdayOpen(false);
       toast(birthday ? 'Готово — друзья увидят дату' : 'Дата убрана', 'success');
+      if (birthday) void askBotMessagesOnce();
     } catch (err) {
       toast(errorMessage(err), 'error');
     }
